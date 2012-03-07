@@ -1660,14 +1660,15 @@ create unlogged table ships_near_planets (
        primary key (ship,planet),
        ship_location point,
        planet_location point,
-       distance float
+       distance float,
+       conqueror_id integer,
+       ship_owner integer
 );
 create index snp_ship on ships_near_planets (ship);
 create index snp_planet on ships_near_planets (planet);
 create index snp_distance on ships_near_planets (distance);
---create index snp_loc1 on ships_near_planets using GIST (ship_location);
---create index snp_loc2 on ships_near_planets using GIST (planet_location);
-
+create index snp_ship_owner on ships_near_planets(ship_owner);
+create index snp_planet_owner on ships_near_planets(conqueror_id);
 
 CREATE OR REPLACE FUNCTION update_ships_near_planets()
   RETURNS boolean AS
@@ -1678,14 +1679,14 @@ declare
 begin
 	SELECT last_value INTO current_tic FROM tic_seq;
 	
-	FOR NEW IN SELECT id, range, location FROM ship 
-		WHERE last_move_tic=current_tic 
+	FOR NEW IN SELECT id, range, location, player_id as ship_owner FROM ship 
+		WHERE last_move_tic=current_tic
 		LOOP
 
 	   delete from ships_near_planets where ship = NEW.id;
 	   -- Record the 10 planets that are nearest to the specified ship
-	   insert into ships_near_planets (ship, planet, ship_location, planet_location, distance)
-	     select NEW.id, p.id, NEW.location, p.location, NEW.location <-> p.location
+	   insert into ships_near_planets (ship, planet, ship_location, planet_location, distance, conqueror_id, ship_owner)
+	     select NEW.id, p.id, NEW.location, p.location, NEW.location <-> p.location, p.conqueror_id, ship_owner
 	       from planets p 
 		--where CIRCLE(NEW.location, NEW.range) ~ p.location
 	       order by NEW.location <-> p.location desc limit 10;
@@ -1698,9 +1699,9 @@ $BODY$
 
 
 CREATE OR REPLACE VIEW planets_in_range AS 
- SELECT sp.ship, sp.planet, sp.ship_location, sp.planet_location, sp.distance
-   FROM ship s, ships_near_planets sp
-  WHERE s.player_id = get_player_id("session_user"()) AND s.id = sp.ship;
+ SELECT sp.ship, sp.planet, sp.ship_location, sp.planet_location, sp.distance, sp.conqueror_id, sp.ship_owner
+   FROM ships_near_planets sp
+  WHERE sp.ship_owner = get_player_id("session_user"());
 
 CREATE VIEW planets AS
 SELECT 
