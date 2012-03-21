@@ -33,7 +33,7 @@ and f.id = 234 and p.ship = s.id and p.distance = 0 and
 pl.id = p.planet and pl.mine_limit > 0;
 
 -- Refuel
-perform id, current_fuel, refuel_ship(id) from my_ships where current_fuel < max_fuel;
+perform id, current_fuel, refuel_ship(id) from my_ships where current_fuel < max_fuel and fleet_id = 231;
 
 -- Get a bit of money
 perform convert_resource(''FUEL'', 150);
@@ -46,10 +46,10 @@ perform upgrade(id, ''MAX_SPEED'', (2000-max_speed)/20 + 5) from
 -- Expand the fleet
 
 -- Create a scout on each planet I own
-insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Scout'', 15,4,0,1, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Scouts'' and p.conqueror_id = pl.id;
+insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Scout'', 5,4,4,7, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Scouts'' and p.conqueror_id = pl.id;
 
 -- Create a prospector on each planet I own
-insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Prospector'', 0,5,0,15, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Prospectors'' and p.conqueror_id = pl.id;
+insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Prospector'', 0,4,1,15, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Prospectors'' and p.conqueror_id = pl.id;
 
 drop table if exists directed_scouts;
 create temp table directed_scouts (ship_id integer, planet_id integer);
@@ -91,7 +91,24 @@ select p.ship_id, planet_id from possible_destinations p, fave_scout_dests f whe
 
 perform move(s.ship_id, 50, NULL::integer, p.location_x, p.location_y) from scouting_missions s, planets p where p.id = s.planet_id ;
 
+-- Attack where possible
 perform attack(r.id, r.ship_in_range_of) from my_ships s, ships_in_range r where s.id = r.id and s.current_health > 0 and r.health > 0 and s.attack > 0 and r.player_id <> 2663;
+
+drop table if exists attack_targets;
+create temp table attack_targets (cause text, location point, as_at timestamptz);
+insert into attack_targets (cause, location, as_at)
+   select ''RECENT CONQUER'', location, toc from my_events
+   where action = ''CONQUER'' and toc > (now() - ''8 hours''::interval);
+insert into attack_targets (cause, location, as_at)
+   select ''RECENT ATTACK'', location, toc from my_events
+   where action = ''ATTACK'' and toc > (now() - ''8 hours''::interval);
+insert into attack_targets (cause, location, as_at)
+   select ''IN RANGE'', enemy_location, now()
+   from ships_in_range;
+
+drop table if exists attack_missions;
+
+
 
 ' where name = 'Scouts';
 
