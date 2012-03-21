@@ -1,5 +1,8 @@
 update my_fleets set script = '
 -- Seize planets
+select mine(ship, planet) from planets_in_range pr, planets p
+where pr.planet = p.id and p.conqueror_id <> 2663;
+
 update planets set name = ''FunbusterLand'' where id in (select planet from planets_in_range) and conqueror_id <> (select id from my_player);
 
 -- Move scouts towards their desired locations
@@ -13,7 +16,7 @@ current_health > 0;
 
 perform move(ship_id, s.max_speed, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) > 15000 ;
 
-perform move(ship_id, 800, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) between 5000 and 15000 ;
+perform move(ship_id, (s.location<->s.destination)/20, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) between 5000 and 15000 ;
 
 perform move(ship_id, 150, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) between 1000 and 5000 ;
 
@@ -43,7 +46,7 @@ perform upgrade(id, ''MAX_SPEED'', (2000-max_speed)/20 + 5) from
 -- Expand the fleet
 
 -- Create a scout on each planet I own
-insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Scout'', 15,5,0,0, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Scouts'' and p.conqueror_id = pl.id;
+insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Scout'', 15,4,0,1, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Scouts'' and p.conqueror_id = pl.id;
 
 -- Create a prospector on each planet I own
 insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Prospector'', 0,5,0,15, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Prospectors'' and p.conqueror_id = pl.id;
