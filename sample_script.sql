@@ -1,6 +1,6 @@
 update my_fleets set script = '
 -- Seize planets
-select mine(ship, planet) from planets_in_range pr, planets p
+perform mine(ship, planet) from planets_in_range pr, planets p
 where pr.planet = p.id and p.conqueror_id <> 2663;
 
 update planets set name = ''FunbusterLand'' where id in (select planet from planets_in_range) and conqueror_id <> (select id from my_player);
@@ -16,7 +16,7 @@ current_health > 0;
 
 perform move(ship_id, s.max_speed, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) > 15000 ;
 
-perform move(ship_id, (s.location<->s.destination)/20, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) between 5000 and 15000 ;
+perform move(ship_id, ((s.location<->s.destination)/20)::integer, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) between 5000 and 15000 ;
 
 perform move(ship_id, 150, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) between 1000 and 5000 ;
 
