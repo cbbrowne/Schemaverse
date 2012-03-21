@@ -11,10 +11,9 @@ destination_y) as destination from my_ships s where
 fleet_id = 231 and
 current_health > 0;
 
-perform move(ship_id, s.max_speed, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id;
+perform move(ship_id, s.max_speed, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (location <->destination) > 3000;
 
--- Refuel
-perform id, current_fuel, refuel_ship(id) from my_ships where current_fuel < max_fuel;
+perform move(ship_id, 100, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (location <->destination) < 3000;
 
 -- Prospectors should mine
 perform s.id as ship_id, s.name, mine(s.id, p.planet) from my_ships s,
@@ -22,17 +21,24 @@ my_fleets f, planets_in_range p, planets pl where s.fleet_id = f.id
 and f.id = 234 and p.ship = s.id and p.distance = 0 and
 pl.id = p.planet and pl.mine_limit > 0;
 
--- Expand the fleet
+-- Refuel
+perform id, current_fuel, refuel_ship(id) from my_ships where current_fuel < max_fuel;
 
 -- Get a bit of money
-perform convert_resource(''FUEL'', (select count(*) from planets where conqueror_id = (select id from my_player))::integer * 1000 * 2);
+perform convert_resource(''FUEL'', 150);
+perform convert_resource(''FUEL'', (select count(*) from planets where conqueror_id = (select id from my_player))::integer * 1000 * 3 + 150);
+
+-- Enhance speediness of my scouts
+perform upgrade(id, ''MAX_SPEED'', (2000-max_speed)/20 + 5) from 
+   (select id, max_speed from my_ships where fleet_id = 231 and max_speed < 1995 and current_health > 0 order by random() limit 10) as unspeedy;
+
+-- Expand the fleet
 
 -- Create a scout on each planet I own
 insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Scout'', 15,5,0,0, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Scouts'' and p.conqueror_id = pl.id;
 
 -- Create a prospector on each planet I own
 insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Prospector'', 0,5,0,15, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Prospectors'' and p.conqueror_id = pl.id;
-
 
 drop table if exists directed_scouts;
 create temp table directed_scouts (ship_id integer, planet_id integer);
@@ -57,7 +63,7 @@ planet_id, point(p.location_x, p.location_y) as planet_location,
 s.location <->point(p.location_x, p.location_y) as distance 
 from my_ships s, planets p, undirected_scouts u
 where  s.current_health > 0 and s.id = u.ship_id
-and s.current_fuel > 0 and p.conqueror_id is null and s.destination is null and
+and s.current_fuel > 0 and (p.conqueror_id <> 2663 or p.conqueror_id is null) and s.destination is null and
 p.id not in (select planet_id from directed_scouts);
 
 update possible_destinations set distance = distance + 2000000 * random();   -- Breaks things up a bit...
@@ -79,6 +85,6 @@ perform attack(r.id, r.ship_in_range_of) from my_ships s, ships_in_range r where
 ' where name = 'Scouts';
 
 
-update my_fleets set enabled = 't' where name = 'Scouts';
+-- update my_fleets set enabled = 't' where name = 'Scouts';
 
 
