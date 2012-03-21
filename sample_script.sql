@@ -1,6 +1,6 @@
 update my_fleets set script = '
 -- Seize planets
-select mine(ship, planet) from planets_in_range pr, planets p
+perform mine(ship, planet) from planets_in_range pr, planets p
 where pr.planet = p.id and p.conqueror_id <> 2663;
 
 update planets set name = ''FunbusterLand'' where id in (select planet from planets_in_range) and conqueror_id <> (select id from my_player);
