@@ -48,7 +48,7 @@ insert into speediness (ship_id, want_speed)
   select id, (2000-max_speed)/20+5 from my_ships where fleet_id = 231 and max_speed < 1995 and current_health > 0
   order by random() limit 5;
 
-perform convert_resource(''FUEL'', (select sum(want_speed) from speediness));
+perform convert_resource(''FUEL'', coalesce((select sum(want_speed) from speediness),0));
 
 perform upgrade(ship_id, ''MAX_SPEED'', ship_id) from speediness;
 
