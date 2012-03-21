@@ -60,21 +60,21 @@ if (select fuel_reserve from my_player) > 5000 then
 
    -- Build a scout and a prospector
    insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-      select 231, ''Scout'', 5,4,4,7, p.location_x, p.location_y, from planets p where conqueror_id = 231 
+      select 231, ''Scout'', 5,4,4,7, p.location_x, p.location_y from planets p where conqueror_id = 231 
       order by random() limit 1;
 
    insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-      select 234, ''Miner'', 0,2,2,16, p.location_x, p.location_y, from planets p where conqueror_id = 231 
+      select 234, ''Miner'', 0,2,2,16, p.location_x, p.location_y from planets p where conqueror_id = 231 
       order by random() limit 1;
 
 elsif (select fuel_reserve from my_player > 1500) then
    if random() > 0.8 then
      insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-       select 231, ''Scout'', 5,4,4,7, p.location_x, p.location_y, from planets p where conqueror_id = 231 
+       select 231, ''Scout'', 5,4,4,7, p.location_x, p.location_y from planets p where conqueror_id = 231 
        order by random() limit 1;
    else
      insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-       select 234, ''Miner'', 4,2,1,13, p.location_x, p.location_y, from planets p where conqueror_id = 231 
+       select 234, ''Miner'', 4,2,1,13, p.location_x, p.location_y from planets p where conqueror_id = 231 
        order by random() limit 1;
    end if;
 
