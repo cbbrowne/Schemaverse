@@ -1,4 +1,5 @@
 update my_fleets set script = '
+
 -- Seize planets
 perform mine(ship, planet) from planets_in_range pr, planets p
 where pr.planet = p.id and p.conqueror_id <> 2663;
@@ -14,36 +15,41 @@ destination_y) as destination from my_ships s where
 fleet_id = 231 and
 current_health > 0;
 
-perform move(ship_id, s.max_speed, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) > 15000 ;
+drop table if exists scout_movement;
+create temp table scout_movement (ship_id integer, max_speed integer, direction integer, x integer, y integer, distance integer);
+insert into scout_movement (ship_id, max_speed, x, y, distance)
+  select ship_id, s.max_speed, l.destination[0]::integer, l.destination[1]::integer, s.location<->s.destination from scout_locations l, my_ships s where s.id = l.ship_id;
 
-perform move(ship_id, ((s.location<->s.destination)/20)::integer, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) between 5000 and 15000 ;
+update scout_movement set max_speed = distance / 20 where distance between 5000 and 15000;
+update scout_movement set max_speed = 150 where distance between 1000 and 5000;
+update scout_movement set max_speed = 80 where distance between 200 and 1000;
+update scout_movement set max_speed = 10 where distance between 2 and 200;
+update scout_movement set max_speed = 0 where distance < 2;
 
-perform move(ship_id, 150, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) between 1000 and 5000 ;
-
-perform move(ship_id, 80, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) between 200 and 1000 ;
-
-perform move(ship_id, 50, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) < 200 ;
-
-perform move(ship_id, 0, NULL::integer, l.destination[0]::integer, l.destination[1]::integer) from scout_locations l, my_ships s where s.id = l.ship_id and (s.location <-> s.destination) < 2 ;
+perform move(ship_id, max_speed, NULL::integer, x, y) from scout_movement;
 
 -- Prospectors should mine
-perform s.id as ship_id, s.name, mine(s.id, p.planet) from my_ships s,
-my_fleets f, planets_in_range p, planets pl where s.fleet_id = f.id
-and f.id = 234 and p.ship = s.id and p.distance = 0 and
-pl.id = p.planet and pl.mine_limit > 0;
+drop table if exists prospectors_in_range;
+create temp table prospectors_in_range (ship_id integer, planet_id integer);
+insert into prospectors_in_range (ship_id, planet_id)
+ select s.id, p.planet from my_ships s, planets_in_range p, planets pl 
+  where p.ship = s.id and 
+       pl.id = p.planet and pl.mine_limit > 0 and s.prospecting > 0;
 
--- Refuel
+select mine(ship_id, planet_id) from prospectors_in_range;
+
+-- Refuel scouts
 perform id, current_fuel, refuel_ship(id) from my_ships where current_fuel < max_fuel and fleet_id = 231;
 
+-- Speed up scouts
 drop table if exists speediness;
 create temp table speediness (ship_id integer, want_speed integer);
 insert into speediness (ship_id, want_speed)
   select id, (2000-max_speed)/20+5 from my_ships where fleet_id = 231 and max_speed < 1995 and current_health > 0
-  order by random limit 5;
+  order by random() limit 5;
 
 select convert_resource(''FUEL'', (select sum(want_speed) from speediness));
 
--- Enhance speediness of my scouts
 perform upgrade(ship_id, ''MAX_SPEED'', ship_id) from speediness;
 
 drop table if exists want_ships;
@@ -51,9 +57,8 @@ create temp table want_ships (fleet_id integer, name text, attack integer, defen
 
 -- Expand the fleet
 if (select fuel_reserve from my_player) > 5000 then
-   select convert_resource(''FUEL'', 2000);
 
-   -- Build a scout *and* a prospector
+   -- Build a scout and a prospector
    insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
       select 231, ''Scout'', 5,4,4,7, p.location_x, p.location_y, from planets p where conqueror_id = 231 
       order by random() limit 1;
@@ -61,10 +66,6 @@ if (select fuel_reserve from my_player) > 5000 then
    insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
       select 234, ''Miner'', 0,2,2,16, p.location_x, p.location_y, from planets p where conqueror_id = 231 
       order by random() limit 1;
-
-   insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
-      select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
-        from want_ships;
 
 elsif (select fuel_reserve from my_player > 1500) then
    if random() > 0.8 then
@@ -81,6 +82,12 @@ elsif (select fuel_reserve from my_player > 1500) then
       select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
         from want_ships;
 end if;
+
+select convert_resource(''FUEL'', (select count(*) from want_ships) * 1000);
+
+insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
+      select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
+        from want_ships;
 
 drop table if exists directed_scouts;
 create temp table directed_scouts (ship_id integer, planet_id integer);
