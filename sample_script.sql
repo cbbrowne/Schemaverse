@@ -48,7 +48,7 @@ insert into speediness (ship_id, want_speed)
   select id, (2000-max_speed)/20+5 from my_ships where fleet_id = 231 and max_speed < 1995 and current_health > 0
   order by random() limit 5;
 
-perform convert_resource(''FUEL'', coalesce((select sum(want_speed) from speediness),0));
+perform convert_resource(''FUEL'', coalesce((select sum(want_speed) from speediness),0)::integer);
 
 perform upgrade(ship_id, ''MAX_SPEED'', ship_id) from speediness;
 
@@ -83,7 +83,7 @@ elsif ((select fuel_reserve from my_player) > 1500) then
         from want_ships;
 end if;
 
-perform convert_resource(''FUEL'', (select count(*) from want_ships) * 1000);
+perform convert_resource(''FUEL'', (select count(*) from want_ships)::integer * 1000);
 
 insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
       select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
