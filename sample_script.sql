@@ -36,7 +36,7 @@ insert into prospectors_in_range (ship_id, planet_id)
   where p.ship = s.id and 
        pl.id = p.planet and pl.mine_limit > 0 and s.prospecting > 0;
 
-select mine(ship_id, planet_id) from prospectors_in_range;
+perform mine(ship_id, planet_id) from prospectors_in_range;
 
 -- Refuel scouts
 perform id, current_fuel, refuel_ship(id) from my_ships where current_fuel < max_fuel and fleet_id = 231;
@@ -48,7 +48,7 @@ insert into speediness (ship_id, want_speed)
   select id, (2000-max_speed)/20+5 from my_ships where fleet_id = 231 and max_speed < 1995 and current_health > 0
   order by random() limit 5;
 
-select convert_resource(''FUEL'', (select sum(want_speed) from speediness));
+perform convert_resource(''FUEL'', (select sum(want_speed) from speediness));
 
 perform upgrade(ship_id, ''MAX_SPEED'', ship_id) from speediness;
 
@@ -83,7 +83,7 @@ elsif ((select fuel_reserve from my_player) > 1500) then
         from want_ships;
 end if;
 
-select convert_resource(''FUEL'', (select count(*) from want_ships) * 1000);
+perform convert_resource(''FUEL'', (select count(*) from want_ships) * 1000);
 
 insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
       select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
@@ -92,7 +92,9 @@ insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting,
 drop table if exists directed_scouts;
 create temp table directed_scouts (ship_id integer, planet_id integer);
 insert into directed_scouts (ship_id, planet_id)
-select s.id as ship_id, p.id as planet_id from my_ships s, planets p, my_fleets f where s.fleet_id = f.id and f.name = ''Scouts'' and (p.location <->s.destination) < 1;
+  select s.id as ship_id, p.id as planet_id 
+    from my_ships s, planets p, my_fleets f 
+    where s.fleet_id = f.id and f.name = ''Scouts'' and (p.location <->s.destination) < 1;
 
 drop table if exists undirected_scouts;
 create temp table undirected_scouts (ship_id integer);
