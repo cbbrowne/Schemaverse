@@ -35,21 +35,52 @@ pl.id = p.planet and pl.mine_limit > 0;
 -- Refuel
 perform id, current_fuel, refuel_ship(id) from my_ships where current_fuel < max_fuel and fleet_id = 231;
 
--- Get a bit of money
-perform convert_resource(''FUEL'', 150);
-perform convert_resource(''FUEL'', (select count(*) from planets where conqueror_id = (select id from my_player))::integer * 1000 * 3 + 150);
+drop table if exists speediness;
+create temp table speediness (ship_id integer, want_speed integer);
+insert into speediness (ship_id, want_speed)
+  select id, (2000-max_speed)/20+5 from my_ships where fleet_id = 231 and max_speed < 1995 and current_health > 0
+  order by random limit 5;
+
+select convert_resource(''FUEL'', (select sum(want_speed) from speediness));
 
 -- Enhance speediness of my scouts
-perform upgrade(id, ''MAX_SPEED'', (2000-max_speed)/20 + 5) from 
-   (select id, max_speed from my_ships where fleet_id = 231 and max_speed < 1995 and current_health > 0 order by random() limit 10) as unspeedy;
+perform upgrade(ship_id, ''MAX_SPEED'', ship_id) from speediness;
+
+drop table if exists want_ships;
+create temp table want_ships (fleet_id integer, name text, attack integer, defense integer, engineering integer, prospecting integer, location_x integer, location_y integer);
 
 -- Expand the fleet
+if (select fuel_reserve from my_player) > 5000 then
+   select convert_resource(''FUEL'', 2000);
 
--- Create a scout on each planet I own
-insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Scout'', 5,4,4,7, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Scouts'' and p.conqueror_id = pl.id;
+   -- Build a scout *and* a prospector
+   insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
+      select 231, ''Scout'', 5,4,4,7, p.location_x, p.location_y, from planets p where conqueror_id = 231 
+      order by random() limit 1;
 
--- Create a prospector on each planet I own
-insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) select f.id, ''Prospector'', 0,4,1,15, p.location_x, p.location_y from my_fleets f, planets p, my_player pl where f.name = ''Prospectors'' and p.conqueror_id = pl.id;
+   insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
+      select 234, ''Miner'', 0,2,2,16, p.location_x, p.location_y, from planets p where conqueror_id = 231 
+      order by random() limit 1;
+
+   insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
+      select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
+        from want_ships;
+
+elsif (select fuel_reserve from my_player > 1500) then
+   if random() > 0.8 then
+     insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
+       select 231, ''Scout'', 5,4,4,7, p.location_x, p.location_y, from planets p where conqueror_id = 231 
+       order by random() limit 1;
+   else
+     insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
+       select 234, ''Miner'', 4,2,1,13, p.location_x, p.location_y, from planets p where conqueror_id = 231 
+       order by random() limit 1;
+   end if;
+
+   insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
+      select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
+        from want_ships;
+end if;
 
 drop table if exists directed_scouts;
 create temp table directed_scouts (ship_id integer, planet_id integer);
