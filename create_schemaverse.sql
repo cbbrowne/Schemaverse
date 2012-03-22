@@ -1,7 +1,6 @@
 -- Schemaverse 
 -- Created by Josh McDougall
--- v1.1.0 - location, location, location
-
+-- v1.1.1 - location, location, location
 begin;
  
 CREATE SEQUENCE round_seq
@@ -76,7 +75,7 @@ CREATE TABLE player
 	username character varying NOT NULL UNIQUE,
 	password character(40) NOT NULL,			-- 'md5' + MD5(password+username) 
 	created timestamp NOT NULL DEFAULT NOW(),
-	balance numeric NOT NULL DEFAULT '10010000',
+	balance numeric NOT NULL DEFAULT '10000',
 	fuel_reserve integer NOT NULL DEFAULT '1000',
 	error_channel CHARACTER(10) NOT NULL DEFAULT lower(generate_string(10)),
 	starting_fleet integer,
@@ -503,7 +502,7 @@ begin
 	SELECT last_value INTO current_tic FROM tic_seq;
 	
 	FOR NEW IN SELECT id, range, location FROM ship 
-		WHERE last_move_tic=current_tic 
+		WHERE last_move_tic between current_tic-5 and current_tic 
 		LOOP
 
 	   delete from ships_near_ships where first_ship = NEW.id;
@@ -643,6 +642,13 @@ BEGIN
 		RETURN NULL;
 	END IF;
 
+	-- Set last_move_tic to force it's inclusion in the next cache update
+	NEW.last_move_tic := (SELECT last_value FROM tic_seq); 
+	--at least warn the other players that there is a new ship. The player's own cache will be rebuilt at next tic
+	  insert into ships_near_ships (first_ship, second_ship, location_first, location_second, distance)
+	     select s1.id, NEW.id, s1.location, NEW.location, NEW.location <-> s1.location
+              from ship s1
+              where s1.id <> NEW.id and (s1.location <-> NEW.location) < s1.range;
 
 	RETURN NEW; 
 END
@@ -889,9 +895,17 @@ BEGIN
 		RETURN FALSE;
 	END IF;
 	IF code = 'FLEET_RUNTIME' THEN
-		IF NOT CHARGE(code, quantity) THEN
-			EXECUTE 'NOTIFY ' || get_player_error_channel() ||', ''Not enough funds to increase fleet runtime'';';
-			RETURN FALSE;
+	
+		IF (SELECT sum(runtime) FROM fleet WHERE player_id=GET_PLAYER_ID(SESSION_USER)) > '0 minutes'::interval THEN
+			IF NOT CHARGE(code, quantity) THEN
+				EXECUTE 'NOTIFY ' || get_player_error_channel() ||', ''Not enough funds to increase fleet runtime'';';
+				RETURN FALSE;
+			END IF;
+		ELSEIF quantity > 1 THEN
+			IF NOT CHARGE(code, quantity-1) THEN
+				EXECUTE 'NOTIFY ' || get_player_error_channel() ||', ''Not enough funds to increase fleet runtime'';';
+				RETURN FALSE;
+			END IF;
 		END IF;
 	
 		UPDATE fleet SET runtime=runtime + (quantity || ' minute')::interval where id=reference_id;
@@ -1679,8 +1693,8 @@ declare
 begin
 	SELECT last_value INTO current_tic FROM tic_seq;
 	
-	FOR NEW IN SELECT id, range, location, player_id as ship_owner FROM ship 
-		WHERE last_move_tic=current_tic
+	FOR NEW IN SELECT id, range, location FROM ship 
+		WHERE last_move_tic between current_tic-5 and current_tic 
 		LOOP
 
 	   delete from ships_near_planets where ship = NEW.id;
@@ -2001,12 +2015,21 @@ CREATE TRIGGER A_TRADE_ITEM_PERMISSION_CHECK BEFORE INSERT OR DELETE ON trade_it
 CREATE OR REPLACE FUNCTION ACTION_PERMISSION_CHECK(ship_id integer) RETURNS boolean AS $action_permission_check$
 DECLARE 
 	ships_player_id integer;
+	lat integer;
+	exploded boolean;
+	ch integer;
 BEGIN
-	SELECT player_id into ships_player_id FROM ship WHERE id=ship_id and destroyed='f' and 
-	    not exists (select 1 from ship_health sh where sh.ship_id = id and sh.current_hurt = ship.max_health)
-            and last_action_tic != (SELECT last_value FROM tic_seq);
-	IF ships_player_id = GET_PLAYER_ID(SESSION_USER) OR SESSION_USER = 'schemaverse' 
-			OR CURRENT_USER = 'schemaverse'  THEN
+	SELECT player_id, last_action_tic, destroyed, current_health into ships_player_id, lat, exploded, ch FROM ship WHERE id=ship_id ;
+	IF (	lat != (SELECT last_value FROM tic_seq)
+		AND
+		exploded = 'f'
+		AND 
+		ch > 0 
+	) AND (
+		ships_player_id = GET_PLAYER_ID(SESSION_USER) 
+		OR (ships_player_id > 0 AND (SESSION_USER = 'schemaverse' OR CURRENT_USER = 'schemaverse'))  
+	) THEN
+		
 		RETURN 't';
 	ELSE 
 		RETURN 'f';
@@ -2801,10 +2824,8 @@ BEGIN
 
 
 	--Reset player resources
-        UPDATE player set balance=10010000, fuel_reserve=100000 WHERE (starting_fleet=0 OR starting_fleet IS NULL) AND username!='schemaverse';
-
-    	UPDATE player set balance=10000, fuel_reserve=100000 WHERE starting_fleet!=0 AND starting_fleet IS NOT NULL;
-	UPDATE fleet SET runtime='1 minute', enabled='t' FROM player WHERE player.starting_fleet=fleet.id AND player.id=fleet.player_id;
+        UPDATE player set balance=10000, fuel_reserve=100000 WHERE  username!='schemaverse';
+   	UPDATE fleet SET runtime='1 minute', enabled='t' FROM player WHERE player.starting_fleet=fleet.id AND player.id=fleet.player_id;
  
 
 	UPDATE planet SET fuel=20000000 WHERE id=1;
