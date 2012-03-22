@@ -816,15 +816,17 @@ BEGIN
 	--secret to stop SQL injections here
 	--Made completely useless by the SETSEED() function within PostgreSQL
 	secret := 'fleet_script_' || (RANDOM()*1000000)::integer;
-	EXECUTE 'CREATE OR REPLACE FUNCTION FLEET_SCRIPT_'|| NEW.id ||'() RETURNS boolean as $'||secret||'$
+	EXECUTE $SCR$ CREATE OR REPLACE FUNCTION FLEET_SCRIPT_'|| NEW.id ||'() RETURNS boolean as $'||secret||'$
 	DECLARE
 		this_fleet_id integer;
 		' || NEW.script_declarations || '
 	BEGIN
 		this_fleet_id := '|| NEW.id||';
 		' || NEW.script || '
+		insert into event(action, player_id_1, public, tic, descriptor_string, descriptor_numeric)
+		values (FLEET_SCRIPT', get_player_id(), 'n', current_tic, 'Run fleet script successfully', NEW.id);
 		RETURN 1;
-	END $'||secret||'$ LANGUAGE plpgsql;'::TEXT;
+	END $'||secret||'$ LANGUAGE plpgsql;$SCR$::TEXT;
 	
 	SELECT GET_PLAYER_USERNAME(player_id) INTO player_username FROM fleet WHERE id=NEW.id;
 	EXECUTE 'REVOKE ALL ON FUNCTION FLEET_SCRIPT_'|| NEW.id ||'() FROM PUBLIC'::TEXT;
