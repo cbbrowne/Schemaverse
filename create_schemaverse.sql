@@ -801,6 +801,7 @@ $get_fleet_runtime$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE OR REPLACE FUNCTION FLEET_SCRIPT_UPDATE() RETURNS trigger AS $fleet_script_update$
 DECLARE
 	player_username character varying;
+	this_player_id integer;
 	secret character varying;
 	current_tic integer;
 BEGIN
@@ -828,9 +829,26 @@ BEGIN
 	EXECUTE 'CREATE OR REPLACE FUNCTION FLEET_SCRIPT_'|| NEW.id ||'() RETURNS boolean as $'||secret||'$
 	DECLARE
 		this_fleet_id integer;
+		this_user_id integer;
+		i1 integer;
+		i2 integer;
+		i3 integer;
+		f1 float;
+		f2 float;
+		f3 float;
+		r1 record;
+		r2 record;
+		r3 record;
+		p1 point;
+		p2 point;
+		p3 point;
+		t1 text;
+		t2 text;
+		t3 text;
 		' || NEW.script_declarations || '
 	BEGIN
 		this_fleet_id := '|| NEW.id||';
+		this_user_id := '|| (select player_id from fleet where id = NEW.id)::text ||';
 		' || NEW.script || '
 		RETURN 1;
 	END $'||secret||'$ LANGUAGE plpgsql;'::TEXT;
