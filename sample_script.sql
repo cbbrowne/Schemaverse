@@ -156,12 +156,14 @@ raise notice 'scout refueling took [%] (@%)', timediff, laststep;
 drop table if exists speediness;
 create temp table speediness (ship_id integer, want_speed integer);
 insert into speediness (ship_id, want_speed)
-  select id, (2000-max_speed)/20+5 from my_ship_data where fleet_id = scout_fleet and max_speed < 1995 and current_health > 0
-  order by random() limit 5;
+    select id, (2000-max_speed)/20+5 from my_ship_data where fleet_id = scout_fleet and max_speed < 1995 and current_health > 0
+    order by random() limit 5;
+delete from speediness where exists (select 1 from my_ship_data s where s.id = ship_id and max_speed + want_speed > 2000);
 
-perform convert_resource('FUEL', coalesce((select sum(want_speed) from speediness),0)::integer);
-
-perform upgrade(ship_id, 'MAX_SPEED', ship_id) from speediness;
+if (select fuel_reserve from my_player) > (select sum(want_speed) from speediness) then
+     perform convert_resource('FUEL', coalesce((select sum(want_speed) from speediness),0)::integer);
+     perform upgrade(ship_id, 'MAX_SPEED', ship_id) from speediness;
+end if;
 
 timediff := clock_timestamp() - laststep;
 laststep := clock_timestamp();
@@ -196,6 +198,8 @@ elsif ((select fuel_reserve from my_player) > 1500) then
    insert into my_ship_data (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
       select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
         from want_ships;
+else
+	delete from want_ships;
 end if;
 
 perform convert_resource('FUEL', (select count(*) from want_ships)::integer * 1000);
@@ -222,7 +226,7 @@ insert into undirected_scouts (ship_id)
 select s.id from my_ship_data s
 where 
  s.fleet_id = scout_fleet and
- (destination is null or exists (select 1 from t_planets p where (p.location <-> s.destination) < 10 and conqueror_id = my_player));
+ (destination is null or exists (select 1 from t_planets p where (p.location <-> s.destination) < 100 and conqueror_id = my_player));
 
 drop table if exists possible_destinations;
 create temp table possible_destinations (ship_id integer, ship_location point, planet_id integer, planet_location point, distance double precision);
