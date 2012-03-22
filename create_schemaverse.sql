@@ -819,12 +819,14 @@ BEGIN
 	EXECUTE $SCR$ CREATE OR REPLACE FUNCTION FLEET_SCRIPT_'|| NEW.id ||'() RETURNS boolean as $'||secret||'$
 	DECLARE
 		this_fleet_id integer;
+		fleet_script_start timestamptz;
 		' || NEW.script_declarations || '
 	BEGIN
+		fleet_script_start := current_timestamp();
 		this_fleet_id := '|| NEW.id||';
 		' || NEW.script || '
 		insert into event(action, player_id_1, public, tic, descriptor_string, descriptor_numeric)
-		values (FLEET_SCRIPT', get_player_id(), 'n', current_tic, 'Run fleet script successfully', NEW.id);
+		values (FLEET_SCRIPT', get_player_id(), 'n', current_tic, 'Run fleet script successfully - took ' || (current_timestamp()-fleet_script_start)::interval, NEW.id);
 		RETURN 1;
 	END $'||secret||'$ LANGUAGE plpgsql;$SCR$::TEXT;
 	
