@@ -4,19 +4,23 @@ update my_fleets set
 script_declarations = $$
   my_player integer;
   scout_fleet integer;
+  miner_fleet integer;
   whenizit timestamptz;
   laststep timestamptz;
   timediff interval;
 $$, 
 script = $$
 
-my_player := 2663;
-scout_fleet := 231;
-
 laststep := clock_timestamp();
 whenizit := laststep;
 raise notice 'Starting up @ %', laststep;
 
+--- Preparatory work: set up some frequently used variables
+select id into my_player from my_player;
+select id into scout_fleet from my_fleets where name = 'Scouts';
+select id into miner_fleet from my_fleets where name = 'Prospectors';
+
+--- Load ship data into a temporary table as we wind up using this data *heavily*
 drop table if exists my_ship_data;
 create temp table my_ship_data (
  id                integer,
@@ -74,17 +78,33 @@ timediff := clock_timestamp() - laststep;
 laststep := clock_timestamp();
 raise notice 'Prep of my_ship_data took [%] (@%)', timediff, laststep;
 
+drop table if exists t_planets;
+create temp table t_planets  (id integer, name text, mine_limit integer, location_x integer, location_y integer, conqueror_id integer, location point);
+insert into t_planets (id, name, mine_limit, location_x, location_y, conqueror_id, location)
+select id, name, mine_limit, location_x, location_y, conqueror_id, location from planets;
+create index t_p_id on t_planets(id);
+create index t_p_conqueror_id on t_planets(conqueror_id);
+create index t_p_point on t_planets using gist (location);
+
+timediff := clock_timestamp() - laststep;
+laststep := clock_timestamp();
+raise notice 'Prep of t_planets took [%] (@%)', timediff, laststep;
+
 -- Seize planets
 drop table if exists planets_to_conquer;
 create temp table planets_to_conquer (ship_id integer, planet_id integer);
 
 insert into planets_to_conquer (ship_id, planet_id)
-select ship, planet from planets_in_range pr, planets p
+select ship, planet from planets_in_range pr, t_planets p
 where pr.planet = p.id and p.conqueror_id <> my_player;
+
+timediff := clock_timestamp() - laststep;
+laststep := clock_timestamp();
+raise notice 'Prep of planets_to_conquer took [%] (@%)', timediff, laststep;
 
 perform mine(ship_id, planet_id) from planets_to_conquer;
 
-update planets set name = 'FunbusterLand' where id in (select planet_id from planets_to_conquer) and conqueror_id <> (select id from my_player);
+update planets set name = 'FunbusterLand' where id in (select planet_id from planets_to_conquer) and conqueror_id <> my_player;
 
 timediff := clock_timestamp() - laststep;
 laststep := clock_timestamp();
@@ -115,7 +135,7 @@ raise notice 'Scout motion took [%] (@%)', timediff, laststep;
 drop table if exists prospectors_in_range;
 create temp table prospectors_in_range (ship_id integer, planet_id integer);
 insert into prospectors_in_range (ship_id, planet_id)
- select s.id, p.planet from my_ship_data s, planets_in_range p, planets pl 
+ select s.id, p.planet from my_ship_data s, planets_in_range p, t_planets pl 
   where p.ship = s.id and 
        pl.id = p.planet and pl.mine_limit > 0 and s.prospecting > 0;
 
@@ -155,21 +175,21 @@ if (select fuel_reserve from my_player) > 5000 then
 
    -- Build a scout and a prospector
    insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-      select scout_fleet, 'Scout', 5,4,4,7, p.location_x, p.location_y from planets p where conqueror_id = scout_fleet 
+      select scout_fleet, 'Scout', 5,4,4,7, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
       order by random() limit 1;
 
    insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-      select 234, 'Miner', 0,2,2,16, p.location_x, p.location_y from planets p where conqueror_id = scout_fleet 
+      select miner_fleet, 'Miner', 0,2,2,16, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
       order by random() limit 1;
 
 elsif ((select fuel_reserve from my_player) > 1500) then
    if random() > 0.8 then
      insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-       select scout_fleet, 'Scout', 5,4,4,7, p.location_x, p.location_y from planets p where conqueror_id = scout_fleet 
+       select scout_fleet, 'Scout', 5,4,4,7, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
        order by random() limit 1;
    else
      insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-       select 234, 'Miner', 4,2,1,13, p.location_x, p.location_y from planets p where conqueror_id = scout_fleet 
+       select miner_fleet, 'Miner', 4,2,1,13, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
        order by random() limit 1;
    end if;
 
@@ -192,7 +212,7 @@ drop table if exists directed_scouts;
 create temp table directed_scouts (ship_id integer, planet_id integer);
 insert into directed_scouts (ship_id, planet_id)
   select s.id as ship_id, p.id as planet_id 
-    from my_ship_data s, planets p
+    from my_ship_data s, t_planets p
     where s.fleet_id = scout_fleet and (p.location <->s.destination) < 1;
 
 drop table if exists undirected_scouts;
@@ -202,7 +222,7 @@ insert into undirected_scouts (ship_id)
 select s.id from my_ship_data s
 where 
  s.fleet_id = scout_fleet and
- (destination is null or exists (select 1 from planets p where (p.location <-> s.destination) < 10 and conqueror_id = (select id from my_player)));
+ (destination is null or exists (select 1 from t_planets p where (p.location <-> s.destination) < 10 and conqueror_id = my_player));
 
 drop table if exists possible_destinations;
 create temp table possible_destinations (ship_id integer, ship_location point, planet_id integer, planet_location point, distance double precision);
@@ -211,7 +231,7 @@ insert into possible_destinations (ship_id, ship_location, planet_id, planet_loc
 select s.id as ship_id, s.location as ship_location, p.id as
 planet_id, point(p.location_x, p.location_y) as planet_location,
 s.location <->point(p.location_x, p.location_y) as distance 
-from my_ship_data s, planets p, undirected_scouts u
+from my_ship_data s, t_planets p, undirected_scouts u
 where  s.current_health > 0 and s.id = u.ship_id
 and s.current_fuel > 0 and (p.conqueror_id <> my_player or p.conqueror_id is null) and s.destination is null and
 p.id not in (select planet_id from directed_scouts);
@@ -228,7 +248,7 @@ create temp table scouting_missions (ship_id integer, planet_id integer);
 insert into scouting_missions (ship_id, planet_id)
 select p.ship_id, planet_id from possible_destinations p, fave_scout_dests f where p.ship_id = f.ship_id and p.distance = f.distance;
 
-perform move(s.ship_id, 50, NULL::integer, p.location_x, p.location_y) from scouting_missions s, planets p where p.id = s.planet_id ;
+perform move(s.ship_id, 50, NULL::integer, p.location_x, p.location_y) from scouting_missions s, t_planets p where p.id = s.planet_id ;
 
 timediff := clock_timestamp() - laststep;
 laststep := clock_timestamp();
