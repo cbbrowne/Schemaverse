@@ -16,17 +16,13 @@ fleet_id = 231 and
 current_health > 0;
 
 drop table if exists scout_movement;
-create temp table scout_movement (ship_id integer, max_speed integer, direction integer, x integer, y integer, distance integer);
-insert into scout_movement (ship_id, max_speed, x, y, distance)
-  select ship_id, s.max_speed, l.destination[0]::integer, l.destination[1]::integer, s.location<->s.destination from scout_locations l, my_ships s where s.id = l.ship_id;
+create temp table scout_movement (ship_id integer, target_speed integer, direction integer, x integer, y integer, distance integer, velocity integer);
+insert into scout_movement (ship_id, target_speed, x, y, distance, velocity)
+  select ship_id, s.max_speed, l.destination[0]::integer, l.destination[1]::integer, s.location<->s.destination, s.speed from scout_locations l, my_ships s where s.id = l.ship_id;
 
-update scout_movement set max_speed = distance / 20 where distance between 5000 and 15000;
-update scout_movement set max_speed = 150 where distance between 1000 and 5000;
-update scout_movement set max_speed = 80 where distance between 200 and 1000;
-update scout_movement set max_speed = 10 where distance between 2 and 200;
-update scout_movement set max_speed = 0 where distance < 2;
+update scout_movement set target_speed = 100 where ((target_speed * target_speed)/(100 *2) > distance);
 
-perform move(ship_id, max_speed, NULL::integer, x, y) from scout_movement;
+perform move(ship_id, target_speed, NULL::integer, x, y) from scout_movement;
 
 -- Prospectors should mine
 drop table if exists prospectors_in_range;
