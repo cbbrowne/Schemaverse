@@ -124,7 +124,12 @@ create temp table scout_movement (ship_id integer, target_speed integer, directi
 insert into scout_movement (ship_id, target_speed, x, y, distance)
   select ship_id, s.max_speed, l.destination[0]::integer, l.destination[1]::integer, s.location<->s.destination from scout_locations l, my_ship_data s where s.id = l.ship_id;
 
-update scout_movement set target_speed = 100 where ((target_speed * target_speed)/(100 *2) > distance);
+--- whoah, nelly!!!
+update scout_movement 
+set target_speed = 100 
+where 
+      ((target_speed*target_speed)/200.0+1.5*target_speed+100) > distance;
+
 perform move(ship_id, target_speed, NULL::integer, x, y) from scout_movement;
 
 timediff := clock_timestamp() - laststep;
