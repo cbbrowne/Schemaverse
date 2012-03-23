@@ -159,7 +159,9 @@ laststep := clock_timestamp();
 raise notice 'mining took [%] (@%)', timediff, laststep;
 
 -- Refuel scouts
-perform id, current_fuel, refuel_ship(id) from my_ship_data where current_fuel < max_fuel and fleet_id = scout_fleet;
+perform id, current_fuel, refuel_ship(id) from 
+(select id, current_fuel, location <->destination as distance from my_ship_data where current_fuel < max_fuel and fleet_id = scout_fleet order by location<->destination) 
+  as ships_in_order_of_criticality;
 
 timediff := clock_timestamp() - laststep;
 laststep := clock_timestamp();
