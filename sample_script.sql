@@ -8,6 +8,10 @@ script_declarations = $$
   whenizit timestamptz;
   laststep timestamptz;
   timediff interval;
+  numships integer;
+  fuel integer;
+  i integer;
+  p_scout float;
 $$, 
 script = $$
 
@@ -70,6 +74,7 @@ select id , fleet_id , player_id , name ,
  target_direction from my_ships;
 
 create index msd_id on my_ship_data(id);
+create index msd_speed on my_ship_data(speed);
 create index msd_fleet on my_ship_data(fleet_id);
 create index msd_loc on my_ship_data using gist(location);
 create index msd_dest on my_ship_data using gist(destination);
@@ -95,8 +100,11 @@ drop table if exists planets_to_conquer;
 create temp table planets_to_conquer (ship_id integer, planet_id integer);
 
 insert into planets_to_conquer (ship_id, planet_id)
-select ship, planet from planets_in_range pr, t_planets p
-where pr.planet = p.id and p.conqueror_id <> my_player;
+select s.id as ship, p.id as planet 
+from t_planets p, my_ship_data s
+where p.conqueror_id <> my_player and
+      (s.location <-> p.location) < s.range and
+      s.current_health > 0 and s.prospecting > 0;
 
 timediff := clock_timestamp() - laststep;
 laststep := clock_timestamp();
@@ -173,40 +181,58 @@ drop table if exists want_ships;
 create temp table want_ships (fleet_id integer, name text, attack integer, defense integer, engineering integer, prospecting integer, location_x integer, location_y integer);
 
 -- Expand the fleet
-if (select fuel_reserve from my_player) > 5000 then
-
-   -- Build a scout and a prospector
-   insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-      select scout_fleet, 'Scout', 5,4,4,7, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
-      order by random() limit 1;
-
-   insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-      select miner_fleet, 'Miner', 0,2,2,16, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
-      order by random() limit 1;
-
-elsif ((select fuel_reserve from my_player) > 1500) then
-   if random() > 0.8 then
-     insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-       select scout_fleet, 'Scout', 5,4,4,7, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
-       order by random() limit 1;
-   else
-     insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-       select miner_fleet, 'Miner', 4,2,1,13, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
-       order by random() limit 1;
-   end if;
-
-   insert into my_ship_data (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
-      select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
-        from want_ships;
+select fuel_reserve into fuel from my_player;
+if fuel > 100000 then
+   numships := 10;
+elsif fuel > 50000 then
+   numships := 5;
+elsif fuel > 25000 then
+   numships := 3;
+elsif fuel > 5000 then
+   numships := 1;
 else
-	delete from want_ships;
+   numships := 0;
 end if;
 
-perform convert_resource('FUEL', (select count(*) from want_ships)::integer * 1000);
+if numships > 0 then
+   drop table if exists t_planetary_defenses;
+   create table t_planetary_defenses (planet_id integer, location point, health integer);
+   insert into t_planetary_defenses (planet_id, location, health)
+      select p.planet_id, p.location, sum(current_health)
+       from t_planets p, my_ship_data s
+       where p.conqueror_id = my_player and
+             (s.location <-> p.location) < s.range and
+             s.speed < 100 and s.prospecting > 10 and current_health > 0
+       group by p.planet_id, p.location;
+   create index t_planet_count on t_planetary_defenses (health);
 
-insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
+   -- Notional probability of building a scout is 15%, to ensure they are well fueled
+   p_scout := 0.15;
+   
+   -- But we might drop the probability if we have too many scouts
+   if (select count(*) from my_ships where speed = 0) < (7 * (select count(*) from my_ships where speed > 0)) then
+      p_scout := 0.05;
+   end if;
+   
+   for i in 1..numships loop
+        if random() < p_scout then
+	  -- Build a scout, at low probability
+	  insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
+	        select scout_fleet, 'Scout', 5,4,4,7, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
+		     and id = (select planet_id from t_planetary_defenses order by health desc limit 1);
+	else
+          -- Build a prospector, on my least built up planet
+   	  insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
+	    select miner_fleet, 'Miner', 0,2,2,16, p.location_x, p.location_y 
+	    from t_planets p where id = (select planet_id from t_planetary_defenses order by health desc limit 1);
+	end if;
+   end loop;
+   perform convert_resource('FUEL', (select count(*) from want_ships)::integer * 1000);
+
+   insert into my_ships (fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y) 
       select fleet_id, name, attack, defense, engineering, prospecting, location_x, location_y
         from want_ships;
+end if;
 
 timediff := clock_timestamp() - laststep;
 laststep := clock_timestamp();
