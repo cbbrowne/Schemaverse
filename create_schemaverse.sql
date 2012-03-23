@@ -479,12 +479,17 @@ create unlogged table ships_near_ships (
        first_ship integer references ship(id) on delete cascade,
        second_ship integer references ship(id) on delete cascade,
        primary key (first_ship, second_ship),
+       first_ship_owner integer not null references player(id),
+       second_ship_owner integer not null references player(id),
        location_first point,
        location_second point,
-       distance float
+       distance float,
+       second_ship_health numeric
 );
 create index sns_first on ships_near_ships (first_ship);
 create index sns_second on ships_near_ships (second_ship);
+create index sns_1_owner on ships_near_ships (first_ship_owner);
+create index sns_2_owner on ships_near_ships (second_ship_owner);
 create index sns_distance on ships_near_ships (distance);
 
 --Cannot create GIST index on unlogged table
@@ -507,12 +512,12 @@ begin
 
 	   delete from ships_near_ships where first_ship = NEW.id;
 	   delete from ships_near_ships where second_ship = NEW.id;
-	   insert into ships_near_ships (first_ship, second_ship, location_first, location_second, distance)
-	     select NEW.id, s2.id, NEW.location, s2.location, NEW.location <-> s2.location
+	   insert into ships_near_ships (first_ship, second_ship, location_first, location_second, distance, first_ship_owner, second_ship_owner)
+	     select NEW.id, s2.id, NEW.location, s2.location, NEW.location <-> s2.location, NEW.player_id, s2.player_id, ((s2.max_health - coalesce ((select current_hurt from ship_health sh where sh.ship_id = s2.id),0))::numeric/(s2.max_health)::numeric)::numeric
               from ship s2
               where s2.id <> NEW.id and (NEW.location <-> s2.location) < NEW.range;
-	   insert into ships_near_ships (first_ship, second_ship, location_first, location_second, distance)
-	     select s1.id, NEW.id, s1.location, NEW.location, NEW.location <-> s1.location
+	   insert into ships_near_ships (first_ship, second_ship, location_first, location_second, distance, first_ship_owner, second_ship_owner, health)
+	     select s1.id, NEW.id, s1.location, NEW.location, NEW.location <-> s1.location, s1.player_id, NEW.id, ((NEW.max_health - coalesce ((select current_hurt from ship_health sh where sh.ship_id = NEW.id),0))::numeric/(NEW.max_health)::numeric)::numeric
               from ship s1
               where s1.id <> NEW.id and (s1.location <-> NEW.location) < s1.range;
         end LOOP;
@@ -524,33 +529,19 @@ $BODY$
 
 CREATE VIEW ships_in_range AS
 SELECT 
-	enemies.id as id,
-	players.id as ship_in_range_of,
-	enemies.player_id as player_id,
-	enemies.name as name,
-	((enemies.max_health-coalesce((select current_hurt from ship_health sh where sh.ship_id=enemies.id),0))::numeric/(enemies.max_health)::numeric)::numeric as health,
-	--enemies.current_health as current_health,
-	--enemies.max_health as max_health,
-	--enemies.current_fuel as current_fuel,
-	--enemies.max_fuel as max_fuel,
-	--enemies.max_speed as max_speed,
-	--enemies.range as range,
-	--enemies.attack as attack,
-	--enemies.defense as defense,
-	--enemies.engineering as engineering,
-	--enemies.prospecting as prospecting,
-	enemies.location as enemy_location
-FROM ship enemies, ship players, ships_near_ships
+       first_ship as id,
+       second_ship as ship_in_range_of,
+       second_ship_owner as player_id,
+       e.name as name,
+       second_ship_health as health,
+       location_second as enemy_location
+FROM ship e, ship players, ships_near_ships
 WHERE 	
-	not (enemies.destroyed) and not (players.destroyed)
-	AND 
-	players.id = first_ship and enemies.id = second_ship
+	e.id = second_ship
 	AND
-	players.player_id=GET_PLAYER_ID(SESSION_USER)
+	first_ship_owner=GET_PLAYER_ID(SESSION_USER)
         AND
-	enemies.player_id!=GET_PLAYER_ID(SESSION_USER)
-        AND
-	(enemies.location <-> players.location) <= players.range;	
+	second_ship_owner != GET_PLAYER_ID(SESSION_USER);
 
 CREATE VIEW my_ships AS 
 SELECT 
@@ -645,8 +636,8 @@ BEGIN
 	-- Set last_move_tic to force it's inclusion in the next cache update
 	NEW.last_move_tic := (SELECT last_value FROM tic_seq); 
 	--at least warn the other players that there is a new ship. The player's own cache will be rebuilt at next tic
-	  insert into ships_near_ships (first_ship, second_ship, location_first, location_second, distance)
-	     select s1.id, NEW.id, s1.location, NEW.location, NEW.location <-> s1.location
+	  insert into ships_near_ships (first_ship, second_ship, first_ship_owner, second_ship_owner, location_first, location_second, distance, second_ship_health)
+	     select s1.id, NEW.id, s1.player_id, NEW.player_id,  s1.location, NEW.location, (NEW.location <-> s1.location), 1
               from ship s1
               where s1.id <> NEW.id and (s1.location <-> NEW.location) < s1.range;
 
@@ -826,32 +817,20 @@ BEGIN
 	--secret to stop SQL injections here
 	--Made completely useless by the SETSEED() function within PostgreSQL
 	secret := 'fleet_script_' || (RANDOM()*1000000)::integer;
-	EXECUTE 'CREATE OR REPLACE FUNCTION FLEET_SCRIPT_'|| NEW.id ||'() RETURNS boolean as $'||secret||'$
+	EXECUTE $SCR$ CREATE OR REPLACE FUNCTION FLEET_SCRIPT_'|| NEW.id ||'() RETURNS boolean as $'||secret||'$
 	DECLARE
 		this_fleet_id integer;
-		this_user_id integer;
-		i1 integer;
-		i2 integer;
-		i3 integer;
-		f1 float;
-		f2 float;
-		f3 float;
-		r1 record;
-		r2 record;
-		r3 record;
-		p1 point;
-		p2 point;
-		p3 point;
-		t1 text;
-		t2 text;
-		t3 text;
+		fleet_script_start timestamptz;
 		' || NEW.script_declarations || '
 	BEGIN
+		fleet_script_start := current_timestamp();
 		this_fleet_id := '|| NEW.id||';
 		this_user_id := '|| (select player_id from fleet where id = NEW.id)::text ||';
 		' || NEW.script || '
+		insert into event(action, player_id_1, public, tic, descriptor_string, descriptor_numeric)
+		values (FLEET_SCRIPT', get_player_id(), 'n', current_tic, 'Run fleet script successfully - took ' || (current_timestamp()-fleet_script_start)::interval, NEW.id);
 		RETURN 1;
-	END $'||secret||'$ LANGUAGE plpgsql;'::TEXT;
+	END $'||secret||'$ LANGUAGE plpgsql;$SCR$::TEXT;
 	
 	SELECT GET_PLAYER_USERNAME(player_id) INTO player_username FROM fleet WHERE id=NEW.id;
 	EXECUTE 'REVOKE ALL ON FUNCTION FLEET_SCRIPT_'|| NEW.id ||'() FROM PUBLIC'::TEXT;
