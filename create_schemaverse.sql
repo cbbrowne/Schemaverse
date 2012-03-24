@@ -440,7 +440,6 @@ $get_ship_name$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TABLE ship_control
 (
 	ship_id integer NOT NULL REFERENCES ship(id) ON DELETE CASCADE,
-	player_id integer NOT NULL REFERENCES player(id) DEFAULT GET_PLAYER_ID(SESSION_USER),
 	speed integer NOT NULL DEFAULT 0,
 	direction integer NOT NULL  DEFAULT 0 CHECK (0 <= direction and direction <= 360),
 	destination point,
@@ -572,7 +571,7 @@ SELECT
 	ship_control.action as action,
 	ship_control.action_target_id as action_target_id
 FROM ship, ship_control 
-WHERE ship.player_id=GET_PLAYER_ID(SESSION_USER) and ship_control.player_id = GET_PLAYER_ID(SESSION_USER) and ship.id=ship_control.ship_id and destroyed='f';
+WHERE ship.player_id=GET_PLAYER_ID(SESSION_USER) and ship.id=ship_control.ship_id and destroyed='f';
 
 CREATE OR REPLACE RULE ship_insert AS ON INSERT TO my_ships 
 	DO INSTEAD INSERT INTO ship (name, range, attack, defense, engineering, prospecting, location, last_living_tic, fleet_id) 
@@ -2911,6 +2910,5 @@ CREATE INDEX event_player ON event USING btree (player_id_1);
 CREATE INDEX planet_player ON planet USING btree (conqueror_id);
 
 CREATE INDEX live_peoples_ships on ship using btree (player_id) where (not destroyed);
-CREATE INDEX ship_control_player on ship_control using btree (player_id);
 
 commit;
