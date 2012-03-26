@@ -144,6 +144,16 @@ timediff := clock_timestamp() - laststep;
 laststep := clock_timestamp();
 raise notice 'Scout motion took [%] (@%)', timediff, laststep;
 
+---  Need to add some code that causes scouts to land on the planet that they claimed, and become a prospector
+--- In effect, if:
+---     destination is This Planet
+---     location is This Planet
+---     I own... This Planet
+--- Then
+---     Shift from scout fleet to mining fleet
+---     STOP the ship
+---     Ideally, add a few points worth of prospecting
+
 -- Prospectors should mine
 drop table if exists prospectors_in_range;
 create temp table prospectors_in_range (ship_id integer, planet_id integer);
@@ -160,7 +170,7 @@ raise notice 'mining took [%] (@%)', timediff, laststep;
 
 -- Refuel scouts
 perform id, current_fuel, refuel_ship(id) from 
-(select id, current_fuel, location <->destination as distance from my_ship_data where current_fuel < max_fuel and fleet_id = scout_fleet order by location<->destination) 
+(select id, current_fuel, location <->destination as distance from my_ship_data where current_fuel < max_fuel and target_speed <> speed and fleet_id = scout_fleet order by location<->destination) 
   as ships_in_order_of_criticality;
 
 timediff := clock_timestamp() - laststep;
