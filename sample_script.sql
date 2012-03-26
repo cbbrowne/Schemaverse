@@ -211,6 +211,8 @@ else
    numships := 0;
 end if;
 
+numships := 0;
+
 if numships > 0 then
    drop table if exists t_planetary_defenses;
    create temp table t_planetary_defenses (planet_id integer, location point, health integer);
@@ -238,7 +240,7 @@ if numships > 0 then
         if random() < p_scout then
 	  -- Build a scout, at low probability
 	  insert into want_ships (fleet_id, name, attack, defense, engineering, prospecting,location_x,location_y)
-	        select scout_fleet, 'Scout', 5,4,4,7, p.location_x, p.location_y from t_planets p where conqueror_id = scout_fleet 
+	        select scout_fleet, 'Scout', 5,4,4,7, p.location_x, p.location_y from t_planets p where conqueror_id = my_player
 		     and id = (select planet_id from t_planetary_defenses order by health desc limit 1);
 	else
           -- Build a prospector, on my least built up planet
@@ -272,7 +274,7 @@ insert into undirected_scouts (ship_id)
 select s.id from my_ship_data s
 where 
  s.fleet_id = scout_fleet and
- (destination is null or exists (select 1 from t_planets p where (p.location <-> s.destination) < 100 and conqueror_id = my_player));
+ (s.destination is null or exists (select 1 from t_planets p where (p.location <-> s.destination) < 100 and conqueror_id = my_player));
 
 drop table if exists possible_destinations;
 create temp table possible_destinations (ship_id integer, ship_location point, planet_id integer, planet_location point, distance double precision);
@@ -319,4 +321,12 @@ raise notice 'Total function time: [%] (@%)', timediff, laststep;
 $$ where name = 'Scouts';
 
 select fleet_script_231();
+update my_fleets set enabled = 't' where name = 'Scouts';
+
+select upgrade(id, 'FLEET_RUNTIME', 1) from
+(select id from my_fleets where name = 'Scouts' and enabled = 't' and
+runtime ='00:00:00'::interval) as fleet_to_activate;
+
 commit;
+
+
