@@ -171,9 +171,9 @@ raise notice 'scout refueling took [%] (@%)', timediff, laststep;
 drop table if exists speediness;
 create temp table speediness (ship_id integer, want_speed integer);
 insert into speediness (ship_id, want_speed)
-    select id, (2000-max_speed)/20+5 from my_ship_data where fleet_id = scout_fleet and max_speed < 1995 and current_health > 0
+    select id, (5000-max_speed)/20+5 from my_ship_data where fleet_id = scout_fleet and max_speed < 4995 and current_health > 0
     order by random() limit 5;
-delete from speediness where exists (select 1 from my_ship_data s where s.id = ship_id and max_speed + want_speed > 2000);
+delete from speediness where exists (select 1 from my_ship_data s where s.id = ship_id and max_speed + want_speed > 5000);
 
 if (select fuel_reserve from my_player) > (select sum(want_speed) from speediness) then
      perform convert_resource('FUEL', coalesce((select sum(want_speed) from speediness),0)::integer);
@@ -203,14 +203,17 @@ end if;
 
 if numships > 0 then
    drop table if exists t_planetary_defenses;
-   create table t_planetary_defenses (planet_id integer, location point, health integer);
-   insert into t_planetary_defenses (planet_id, location, health)
-      select p.planet_id, p.location, sum(current_health)
+   create temp table t_planetary_defenses (planet_id integer, location point, health integer);
+   insert into t_planetary_defenses (planet_id, health)
+      select p.id, sum(current_health)
        from t_planets p, my_ship_data s
        where p.conqueror_id = my_player and
              (s.location <-> p.location) < s.range and
              s.speed < 100 and s.prospecting > 10 and current_health > 0
-       group by p.planet_id, p.location;
+       group by p.id;
+   insert into t_planetary_defenses (planet_id, health)
+   select id, 0 from t_planets where conqueror_id = my_player and id not in (select planet_id from t_planetary_defenses);
+   update t_planetary_defenses set location = (select location from t_planets where id = planet_id);
    create index t_planet_count on t_planetary_defenses (health);
 
    -- Notional probability of building a scout is 15%, to ensure they are well fueled
