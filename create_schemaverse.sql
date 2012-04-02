@@ -2106,33 +2106,18 @@ BEGIN
 END
 $action_permission_check$ LANGUAGE plpgsql SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION IN_RANGE_SHIP(ship_1 integer, ship_2 integer) RETURNS boolean AS $in_range_ship$
-DECLARE
-	check_count integer;
-BEGIN
-	SELECT 
-		count(enemies.id)
-	INTO check_count
-	FROM ship enemies, ship players
-	WHERE 	
-		enemies.destroyed='f' AND players.destroyed='f'
-		AND
-		(
-			players.id=ship_1
-			AND 
-			enemies.id=ship_2
- 		) 
-		AND
-		(	
-			(enemies.location <-> players.location) < players.range
-		);
-	IF check_count = 1 THEN
-		RETURN 't';
-	ELSE
-		RETURN 'f';
-	END IF;
-END
-$in_range_ship$ LANGUAGE plpgsql SECURITY DEFINER;
+CREATE OR REPLACE FUNCTION IN_RANGE_SHIP(player_ship integer, enemy_ship integer) RETURNS boolean AS $in_range_ship$
+  select exists
+    (select 1 from ship enemy, ship player
+       where and player.id = $1 and enemy.id = $2
+       and not enemy.destroyed
+       and not player.destroyed
+       and (enemy.location <->player.location) < player.range);
+$in_range_ship$ LANGUAGE sql SECURITY DEFINER;
+
+comment on FUNCTION IN_RANGE_SHIP(player_ship integer, enemy_ship integer) is
+'See if the enemy ship is in range of the player ship.  Note that the range is based on the player - 
+it is NOT necessarily the case that in_range_ship(a,b) = in_range_ship(b,a).';
 
 CREATE OR REPLACE FUNCTION IN_RANGE_PLANET(ship_id integer, planet_id integer) RETURNS boolean AS $in_range_planet$
 	select exists (select 1 from planet p, ship s
