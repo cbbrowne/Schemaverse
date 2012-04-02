@@ -2138,26 +2138,10 @@ CREATE OR REPLACE FUNCTION IN_RANGE_PLANET(ship_id integer, planet_id integer) R
 DECLARE
 	check_count integer;
 BEGIN
-	SELECT 
-		count(planet.id)
-	INTO check_count
-	FROM planet, ship
-	WHERE 	ship.destroyed='f'
-		AND
-		(
-			ship.id=ship_id
-			AND 
-			planet.id=planet_id
- 		) 
-		AND
-		(
-			(planet.location <-> ship.location) < ship.range
-		);
-	IF check_count = 1 THEN
-		RETURN 't';
-	ELSE
-		RETURN 'f';
-	END IF;
+	return exists (select 1 from planet p, ship s
+	       	       where 
+                          not s.destroyed and
+                          (p.location <->s.location) < s.range);
 END
 $in_range_planet$ LANGUAGE plpgsql SECURITY DEFINER;
 
