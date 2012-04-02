@@ -2135,15 +2135,12 @@ END
 $in_range_ship$ LANGUAGE plpgsql SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION IN_RANGE_PLANET(ship_id integer, planet_id integer) RETURNS boolean AS $in_range_planet$
-DECLARE
-	check_count integer;
-BEGIN
-	return exists (select 1 from planet p, ship s
+	select exists (select 1 from planet p, ship s
 	       	       where 
+		       	  s.id = $1 and p.id = $2 and
                           not s.destroyed and
-                          (p.location <->s.location) < s.range);
-END
-$in_range_planet$ LANGUAGE plpgsql SECURITY DEFINER;
+                          (p.location <->s.location) < s.range)
+$in_range_planet$ LANGUAGE sql SECURITY DEFINER;
 
 -- Action methods
 CREATE OR REPLACE FUNCTION Attack(attacker integer, enemy_ship integer) RETURNS integer AS $attack$
