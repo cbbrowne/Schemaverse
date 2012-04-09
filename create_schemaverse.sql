@@ -644,13 +644,8 @@ BEGIN
 		RETURN NULL;
 	END IF;
 
-	-- Set last_move_tic to force it's inclusion in the next cache update
+	-- Set last_move_tic to force its inclusion in the next cache update
 	NEW.last_move_tic := (SELECT last_value FROM tic_seq); 
-	--at least warn the other players that there is a new ship. The player's own cache will be rebuilt at next tic
-	  insert into ships_near_ships (first_ship, second_ship, first_ship_owner, second_ship_owner, location_first, location_second, distance, second_ship_health)
-	     select s1.id, NEW.id, s1.player_id, NEW.player_id,  s1.location, NEW.location, (NEW.location <-> s1.location), 1
-              from ship s1
-              where s1.id <> NEW.id and (s1.location <-> NEW.location) < s1.range;
 
 	RETURN NEW; 
 END
