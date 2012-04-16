@@ -468,29 +468,13 @@ WITH current_player as (SELECT GET_PLAYER_ID(SESSION_USER) AS player_id)
 	ship_flight_recorder, current_player
   WHERE ship_flight_recorder.player_id = current_player.player_id; 
 
-
-create unlogged table ships_near_ships (
-       first_ship integer references ship(id) on delete cascade,
-	player_id integer references player(id) on delete cascade,
-       second_ship integer references ship(id) on delete cascade,
-       primary key (first_ship, second_ship),
-       first_ship_owner integer not null references player(id),
-       second_ship_owner integer not null references player(id),
-       location_first point,
-       location_second point,
-       distance float,
-       second_ship_health numeric
+create table visible_ships (
+	viewer_id integer not null references player(id) on delete cascade,
+        ship_id integer not null references ship(id) on delete cascade,
+	primary key (viewer_id, ship_id),
+        ship_owner integer not null references player(id),
+        location point
 );
-create index sns_first on ships_near_ships (first_ship);
-create index sns_second on ships_near_ships (second_ship);
-create index sns_1_owner on ships_near_ships (first_ship_owner);
-create index sns_2_owner on ships_near_ships (second_ship_owner);
-create index sns_distance on ships_near_ships (distance);
-
---Cannot create GIST index on unlogged table
---create index sns_loc1 on ships_near_ships using GIST (location_first);
---create index sns_loc2 on ships_near_ships using GIST (location_second);
-
 
 CREATE OR REPLACE FUNCTION update_ships_near_ships()
   RETURNS boolean AS
@@ -500,22 +484,19 @@ declare
 	current_tic integer;
 begin
 	SELECT last_value INTO current_tic FROM tic_seq;
-	
-	FOR NEW IN SELECT id, range, location, player_id FROM ship 
-		WHERE last_move_tic between current_tic-5 and current_tic 
-		LOOP
 
-	   delete from ships_near_ships where first_ship = NEW.id;
-	   delete from ships_near_ships where second_ship = NEW.id;
-	   insert into ships_near_ships (first_ship, player_id,  second_ship, location_first, location_second, distance)
-	     select NEW.id, NEW.player_id, s2.id, NEW.location, s2.location, NEW.location <-> s2.location
-              from ship s2
-              where s2.id <> NEW.id AND s2.player_id <> NEW.player_id and CIRCLE(NEW.location,NEW.range) @> CIRCLE(s2.location,1) ;
-	   insert into ships_near_ships (first_ship, player_id, second_ship, location_first, location_second, distance)
-	     select s1.id, s1.player_id, NEW.id, s1.location, NEW.location, NEW.location <-> s1.location
-              from ship s1
-              where s1.id <> NEW.id and s1.player_id <> NEW.player_id and CIRCLE(s1.location,s1.range) @> CIRCLE(NEW.location,1);
-        end LOOP;
+	-- Go for some mass, mass operations...
+	delete from visible_ships where exists (select 1 from ship s where  s.id = ship_id and
+              s.last_move_tic between current_tic-5 and current_tic;
+
+        insert into visible_ships (viewer_id, ship_id, ship_owner, location)
+            select viewer.player_id, viewee.id, viewee.player_id, viewee.location
+            from ship viewer, ship viewee
+            where circle(viewer.location, viewer.range) @> viewee.location
+              and not exists (select 1 from visible_ships v2 where v2.viewer_id = viewer.player_id and v2.ship_id = viewee.id)
+              and viewer.last_move_tic between current_tic-5 and current_tic 
+              and viewee.last_move_tic between current_tic-5 and current_tic;
+
 	return 't';
 end
 $BODY$
@@ -523,33 +504,18 @@ $BODY$
   COST 100;
 
 
-CREATE OR REPLACE VIEW ships_in_range_ AS 
-SELECT 
-	enemies.id as id,
-	players.id as ship_in_range_of,
-	enemies.player_id as player_id,
-	enemies.name as name,
-	enemies.current_health::numeric / enemies.max_health::numeric AS health,
-	--enemies.current_health as current_health,
-	--enemies.max_health as max_health,
-	--enemies.current_fuel as current_fuel,
-	--enemies.max_fuel as max_fuel,
-	--enemies.max_speed as max_speed,
-	--enemies.range as range,
-	--enemies.attack as attack,
-	--enemies.defense as defense,
-	--enemies.engineering as engineering,
-	--enemies.prospecting as prospecting,
-	enemies.location as enemy_location
-FROM ship enemies, ship players, ships_near_ships sns
-WHERE 
-  sns.player_id=get_player_id(session_user) AND
-   NOT enemies.destroyed AND 
-  NOT players.destroyed AND 
-  players.id = sns.first_ship  AND
-  players.player_id=get_player_id(session_user)
-  AND enemies.id = sns.second_ship 
-  AND CIRCLE(players.location, players.range) @> CIRCLE(enemies.location,1);
+create or replace view ships_visible as
+select
+       v.ship_id as enemy_ship,
+       s.name as enemy_ship_name,
+       v.ship_owner as enemy_player,
+       s.current_health::numeric/s.max_health::numeric as enemy_health,
+       v.location as enemy_location ---  Or should we  go with s.location?
+from
+    visible_ships v, ship s
+where 
+   v.viewer_id=get_player_id(session_user) AND s.id = v.ship_id
+    and not (s.destroyed);
 	
 --And we are back to the original my_ships. Repair to GET_PLAYER_ID() and some new index made this run faster than the previous fix
 CREATE OR REPLACE VIEW my_ships AS 
@@ -684,8 +650,7 @@ BEGIN
 	        UPDATE player SET balance=balance+(select cost from price_list where code='SHIP') WHERE id=OLD.player_id;
 		
 		delete from ships_near_planets where ship = NEW.id;
-	   	delete from ships_near_ships where first_ship = NEW.id;
-	   	delete from ships_near_ships where second_ship = NEW.id;
+	   	delete from visible_ships where ship_id = NEW.id;
 
 		INSERT INTO global_event(action, player_id_1, ship_id_1, location, tic)
 			VALUES('EXPLODE',NEW.player_id, NEW.id, NEW.location, (SELECT last_value FROM tic_seq));
@@ -2843,6 +2808,7 @@ BEGIN
         delete from ship;
         delete from event;
         delete from planet WHERE id != 1;
+	delete from visible_ships;
 
         alter sequence event_id_seq restart with 1;
         alter sequence ship_id_seq restart with 1;
@@ -2951,5 +2917,9 @@ CREATE INDEX planet_player ON planet USING btree (conqueror_id);
 CREATE INDEX planet_loc_only ON planet USING gist (CIRCLE(location,100000));
 
 CREATE INDEX live_peoples_ships on ship using btree (player_id) where (not destroyed);
+
+create index vs_viewer on visible_ships using btree(viewer_id, ship_id);
+create index vs_location on visible_ships using gist(circle(location,1));
+
 
 commit;
