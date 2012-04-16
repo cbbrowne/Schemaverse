@@ -12,6 +12,8 @@ script_declarations = $$
   fuel integer;
   i integer;
   p_scout float;
+  max_possible_speed integer;
+  more_speed_spending integer;
 $$, 
 script = $$
 
@@ -169,15 +171,40 @@ raise notice 'scout refueling took [%] (@%)', timediff, laststep;
 
 -- Speed up scouts
 drop table if exists speediness;
-create temp table speediness (ship_id integer, want_speed integer);
-insert into speediness (ship_id, want_speed)
-    select id, (5000-max_speed)/20+5 from my_ship_data where fleet_id = scout_fleet and max_speed < 4995 and current_health > 0
-    order by random() limit 5;
-delete from speediness where exists (select 1 from my_ship_data s where s.id = ship_id and max_speed + want_speed > 5000);
+create temp table speediness (ship_id integer, current_speed integer, want_speed integer);
+select numeric_value into max_possible_speed from public_variable where name = 'MAX_SHIP_SPEED';
 
-if (select fuel_reserve from my_player) > (select sum(want_speed) from speediness) then
-     perform convert_resource('FUEL', coalesce((select sum(want_speed) from speediness),0)::integer);
-     perform upgrade(ship_id, 'MAX_SPEED', ship_id) from speediness;
+select fuel_reserve into fuel from my_player;
+if fuel_reserve < 5000 then
+   more_speed_spending := 0;
+elsif fuel_reserve < 10000 then
+   more_speed_spending := 1000;
+elsif fuel_reserve < 25000 then
+   more_speed_spending := 2000;
+elsif fuel_reserve < 50000 then
+   more_speed_spending := 4000;
+elsif fuel_reserve < 100000 then
+   more_speed_spending := 6000;
+elsif fuel_reserve < 250000 then
+   more_speed_spending := 10000;
+elsif fuel_reserve < 1000000 then
+   more_speed_spending := 50000;
+else
+   more_speed_spending := 100000;
+end if;
+
+if more_speed_spending > 0 then
+--- Find all the ships that are nearing their maximum speed
+  insert into speediness (ship_id, current_speed)
+    select id, max_speed from my_ship_data where fleet_id = scout_fleet and max_speed < max_possible_speed and current_health > 0 and (max_speed - speed) < 2 * current_fuel;
+
+  perform convert_resource('FUEL', more_speed_spending);
+  perform upgrade(ship_id, 'MAX_SPEED', 100) from
+    (select ship_id from speediness order by random() limit (more_speed_spending / 125);
+
+  perform upgrade(ship_id, 'MAX_SHIP_FUEL', 100) from
+    (select ship_id from speediness order by random() limit (more_speed_spending / 500);
+
 end if;
 
 timediff := clock_timestamp() - laststep;
