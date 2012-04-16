@@ -1,6 +1,6 @@
 -- Schemaverse 
 -- Created by Josh McDougall
--- v1.1.1 - location, location, location
+-- v1.2.2 - Making things usable
 begin;
  
 CREATE SEQUENCE round_seq
@@ -100,14 +100,10 @@ CREATE VIEW my_player AS
 ALTER TABLE variable ADD CONSTRAINT fk_variable_player_id FOREIGN KEY (player_id)
       REFERENCES player (id) MATCH SIMPLE; 
 
+--Credit to xocolatl for optimizing this function
 CREATE OR REPLACE FUNCTION GET_PLAYER_ID(check_username name) RETURNS integer AS $get_player_id$
-DECLARE
-	found_player_id integer;
-BEGIN
-	SELECT id INTO found_player_id FROM player WHERE username=check_username;
-	RETURN found_player_id;
-END
-$get_player_id$ LANGUAGE plpgsql SECURITY DEFINER;
+SELECT id FROM player WHERE username=$1;
+$get_player_id$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 CREATE VIEW public_variable AS SELECT * FROM variable WHERE (private='f' AND player_id=0) OR player_id=GET_PLAYER_ID(SESSION_USER);
 
@@ -229,13 +225,8 @@ CREATE TRIGGER PLAYER_CREATION AFTER INSERT ON player
 
 
 CREATE OR REPLACE FUNCTION GET_PLAYER_USERNAME(check_player_id integer) RETURNS character varying AS $get_player_username$
-DECLARE 
-	found_username character varying;
-BEGIN
-	SELECT username INTO found_username FROM player WHERE id=check_player_id;
-	RETURN found_username;
-END
-$get_player_username$ LANGUAGE plpgsql SECURITY DEFINER;
+SELECT username FROM player WHERE id=$1;
+$get_player_username$  LANGUAGE sql STABLE SECURITY DEFINER;
 
 
 CREATE OR REPLACE FUNCTION GET_PLAYER_ERROR_CHANNEL(player_name character varying default SESSION_USER) RETURNS character varying AS 
@@ -440,6 +431,7 @@ $get_ship_name$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TABLE ship_control
 (
 	ship_id integer NOT NULL REFERENCES ship(id) ON DELETE CASCADE,
+	player_id integer NOT NULL REFERENCES player(id) ON DELETE CASCADE,
 	speed integer NOT NULL DEFAULT 0,
 	direction integer NOT NULL  DEFAULT 0 CHECK (0 <= direction and direction <= 360),
 	destination point,
@@ -465,18 +457,21 @@ CREATE TABLE ship_flight_recorder
   PRIMARY KEY (ship_id, tic)
 );
 
-CREATE VIEW my_ships_flight_recorder AS
-SELECT 
-  ship_id,
-  tic, 
-  location
-FROM ship_flight_recorder
-WHERE
-  ship_id in (select id from ship where player_id=GET_PLAYER_ID(SESSION_USER));    
+CREATE OR REPLACE VIEW my_ships_flight_recorder AS 
+WITH current_player as (SELECT GET_PLAYER_ID(SESSION_USER) AS player_id)
+ SELECT 
+	ship_flight_recorder.ship_id, 
+	ship_flight_recorder.tic, 
+	ship_flight_recorder.location_x, 
+	ship_flight_recorder.location_y
+   FROM 
+	ship_flight_recorder, current_player
+  WHERE ship_flight_recorder.player_id = current_player.player_id; 
 
 
 create unlogged table ships_near_ships (
        first_ship integer references ship(id) on delete cascade,
+	player_id integer references player(id) on delete cascade,
        second_ship integer references ship(id) on delete cascade,
        primary key (first_ship, second_ship),
        first_ship_owner integer not null references player(id),
@@ -506,20 +501,20 @@ declare
 begin
 	SELECT last_value INTO current_tic FROM tic_seq;
 	
-	FOR NEW IN SELECT id, range, location FROM ship 
+	FOR NEW IN SELECT id, range, location, player_id FROM ship 
 		WHERE last_move_tic between current_tic-5 and current_tic 
 		LOOP
 
 	   delete from ships_near_ships where first_ship = NEW.id;
 	   delete from ships_near_ships where second_ship = NEW.id;
-	   insert into ships_near_ships (first_ship, second_ship, location_first, location_second, distance, first_ship_owner, second_ship_owner)
-	     select NEW.id, s2.id, NEW.location, s2.location, NEW.location <-> s2.location, NEW.player_id, s2.player_id, ((s2.max_health - coalesce ((select current_hurt from ship_health sh where sh.ship_id = s2.id),0))::numeric/(s2.max_health)::numeric)::numeric
+	   insert into ships_near_ships (first_ship, player_id,  second_ship, location_first, location_second, distance)
+	     select NEW.id, NEW.player_id, s2.id, NEW.location, s2.location, NEW.location <-> s2.location
               from ship s2
-              where s2.id <> NEW.id and (NEW.location <-> s2.location) < NEW.range;
-	   insert into ships_near_ships (first_ship, second_ship, location_first, location_second, distance, first_ship_owner, second_ship_owner, health)
-	     select s1.id, NEW.id, s1.location, NEW.location, NEW.location <-> s1.location, s1.player_id, NEW.id, ((NEW.max_health - coalesce ((select current_hurt from ship_health sh where sh.ship_id = NEW.id),0))::numeric/(NEW.max_health)::numeric)::numeric
+              where s2.id <> NEW.id AND s2.player_id <> NEW.player_id and CIRCLE(NEW.location,NEW.range) @> CIRCLE(s2.location,1) ;
+	   insert into ships_near_ships (first_ship, player_id, second_ship, location_first, location_second, distance)
+	     select s1.id, s1.player_id, NEW.id, s1.location, NEW.location, NEW.location <-> s1.location
               from ship s1
-              where s1.id <> NEW.id and (s1.location <-> NEW.location) < s1.range;
+              where s1.id <> NEW.id and s1.player_id <> NEW.player_id and CIRCLE(s1.location,s1.range) @> CIRCLE(NEW.location,1);
         end LOOP;
 	return 't';
 end
@@ -527,23 +522,39 @@ $BODY$
   LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   COST 100;
 
-CREATE VIEW ships_in_range AS
+CREATE OR REPLACE VIEW ships_in_range AS 
+WITH 
+	current_player AS (SELECT GET_PLAYER_ID(SESSION_USER) as player_id),
+	players AS (SELECT ship.id, ship.name, ship.location, ship.range, ship.destroyed from ship, current_player WHERE ship.player_id=current_player.player_id),
+	sns AS (SELECT  ships_near_ships.* FROM ships_near_ships, current_player WHERE ships_near_ships.player_id=current_player.player_id),
+	enemies AS (SELECT ship.id, ship.name, ship.player_id, ship.destroyed, ship.current_health::numeric / ship.max_health::numeric AS health, ship.location from ship WHERE ship.player_id in (SELECT DISTINCT sns.player_id FROM sns))
 SELECT 
-       first_ship as id,
-       second_ship as ship_in_range_of,
-       second_ship_owner as player_id,
-       e.name as name,
-       second_ship_health as health,
-       location_second as enemy_location
-FROM ship e, ship players, ships_near_ships
-WHERE 	
-	e.id = second_ship
-	AND
-	first_ship_owner=GET_PLAYER_ID(SESSION_USER)
-        AND
-	second_ship_owner != GET_PLAYER_ID(SESSION_USER);
-
-CREATE VIEW my_ships AS 
+	enemies.id as id,
+	players.id as ship_in_range_of,
+	enemies.player_id as player_id,
+	enemies.name as name,
+	enemies.health as health,
+	--enemies.current_health as current_health,
+	--enemies.max_health as max_health,
+	--enemies.current_fuel as current_fuel,
+	--enemies.max_fuel as max_fuel,
+	--enemies.max_speed as max_speed,
+	--enemies.range as range,
+	--enemies.attack as attack,
+	--enemies.defense as defense,
+	--enemies.engineering as engineering,
+	--enemies.prospecting as prospecting,
+	enemies.location as enemy_location
+FROM enemies, players, sns
+  WHERE 
+  NOT enemies.destroyed AND 
+  NOT players.destroyed AND 
+  players.id = sns.first_ship 
+  AND enemies.id = sns.second_ship 
+  AND (enemies.location <-> players.location) <= players.range;
+	
+--And we are back to the original my_ships. Repair to GET_PLAYER_ID() and some new index made this run faster than the previous fix
+CREATE OR REPLACE VIEW my_ships AS 
 SELECT 
 	ship.id as id,
 	ship.fleet_id as fleet_id,
@@ -653,10 +664,10 @@ CREATE OR REPLACE FUNCTION create_ship_event()
   RETURNS trigger AS
 $BODY$
 BEGIN
-	INSERT INTO ship_flight_recorder(ship_id, tic, location) VALUES(NEW.id, (SELECT last_value FROM tic_seq)-1, NEW.location);
+	INSERT INTO ship_flight_recorder(ship_id, tic, location, player_id) VALUES(NEW.id, (SELECT last_value FROM tic_seq)-1, NEW.location, NEW.player_id);
 
-	INSERT INTO event(action, player_id_1, ship_id_1, location, public, tic)
-		VALUES('BUY_SHIP',NEW.player_id, NEW.id, NEW.location, 'f',(SELECT last_value FROM tic_seq));
+	INSERT INTO private_event(action, player_id_1, ship_id_1, location, tic)
+		VALUES('BUY_SHIP',NEW.player_id, NEW.id, NEW.location, (SELECT last_value FROM tic_seq));
 	RETURN NULL; 
 END
 $BODY$
@@ -678,8 +689,8 @@ BEGIN
 	   	delete from ships_near_ships where first_ship = NEW.id;
 	   	delete from ships_near_ships where second_ship = NEW.id;
 
-		INSERT INTO event(action, player_id_1, ship_id_1, location, public, tic)
-			VALUES('EXPLODE',NEW.player_id, NEW.id, NEW.location, 't',(SELECT last_value FROM tic_seq));
+		INSERT INTO global_event(action, player_id_1, ship_id_1, location, tic)
+			VALUES('EXPLODE',NEW.player_id, NEW.id, NEW.location, (SELECT last_value FROM tic_seq));
 
 	END IF;
 	RETURN NULL;
@@ -694,7 +705,7 @@ CREATE TRIGGER DESTROY_SHIP AFTER UPDATE ON ship
 
 CREATE OR REPLACE FUNCTION CREATE_SHIP_CONTROLLER() RETURNS trigger AS $create_ship_controller$
 BEGIN
-	INSERT INTO ship_control(ship_id) VALUES(NEW.id);
+	INSERT INTO ship_control(ship_id, player_id) VALUES(NEW.id, NEW.player_id);
 	RETURN NEW;
 END
 $create_ship_controller$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -709,7 +720,7 @@ CREATE OR REPLACE FUNCTION ship_move_update()
 $BODY$
 BEGIN
   IF NOT NEW.location ~= OLD.location THEN
-    INSERT INTO ship_flight_recorder(ship_id, tic, location) VALUES(NEW.id, (SELECT last_value FROM tic_seq), NEW.location);
+    INSERT INTO ship_flight_recorder(ship_id, tic, location, player_id) VALUES(NEW.id, (SELECT last_value FROM tic_seq), NEW.location, NEW.player_id);
   END IF;
   RETURN NULL;
 END $BODY$
@@ -819,14 +830,13 @@ BEGIN
 	EXECUTE $SCR$ CREATE OR REPLACE FUNCTION FLEET_SCRIPT_'|| NEW.id ||'() RETURNS boolean as $'||secret||'$
 	DECLARE
 		this_fleet_id integer;
-		fleet_script_start timestamptz;
+		this_fleet_script_start timestamptz;
 		' || NEW.script_declarations || '
 	BEGIN
-		fleet_script_start := current_timestamp();
+		this_fleet_script_start := current_timestamp;
 		this_fleet_id := '|| NEW.id||';
 		' || NEW.script || '
-		insert into event(action, player_id_1, public, tic, descriptor_string, descriptor_numeric)
-		values (FLEET_SCRIPT', get_player_id(), 'n', current_tic, 'Run fleet script successfully - took ' || (current_timestamp()-fleet_script_start)::interval, NEW.id);
+		PERFORM insert_fleet_event(this_fleet_id, ( current_timestamp - this_fleet_script_start )::interval) ;
 		RETURN 1;
 	END $'||secret||'$ LANGUAGE plpgsql;$SCR$::TEXT;
 	
@@ -868,8 +878,8 @@ BEGIN
 	UPDATE ship SET current_fuel=new_ship_fuel WHERE id=ship_id;
 	UPDATE player SET fuel_reserve=new_fuel_reserve WHERE username=SESSION_USER;
 
-	INSERT INTO event(action, player_id_1, ship_id_1, descriptor_numeric, public, tic)
-		VALUES('REFUEL_SHIP',GET_PLAYER_ID(SESSION_USER), ship_id , new_ship_fuel, 'f',(SELECT last_value FROM tic_seq));
+	INSERT INTO private_event(action, player_id_1, ship_id_1, descriptor_numeric, tic)
+		VALUES('REFUEL_SHIP',GET_PLAYER_ID(SESSION_USER), ship_id , new_ship_fuel, (SELECT last_value FROM tic_seq));
 
 	RETURN new_ship_fuel;
 END
@@ -882,7 +892,7 @@ CREATE OR REPLACE FUNCTION upgrade(reference_id integer, code character varying,
 $BODY$
 DECLARE 
 
-	ship_value smallint;
+	ship_value integer;
 	
 BEGIN
 	IF code = 'SHIP' THEN
@@ -905,8 +915,8 @@ BEGIN
 	
 		UPDATE fleet SET runtime=runtime + (quantity || ' minute')::interval where id=reference_id;
 
-		INSERT INTO event(action, player_id_1, referencing_id, public, tic)
-			VALUES('FLEET',GET_PLAYER_ID(SESSION_USER), reference_id , 'f',(SELECT last_value FROM tic_seq));
+		INSERT INTO private_event(action, player_id_1, referencing_id, tic)
+			VALUES('FLEET',GET_PLAYER_ID(SESSION_USER), reference_id , (SELECT last_value FROM tic_seq));
 		RETURN TRUE;
 
 	END IF;
@@ -989,8 +999,8 @@ BEGIN
 	
 	END IF;	
 
-	INSERT INTO event(action, player_id_1, ship_id_1, descriptor_numeric,descriptor_string, public, tic)
-	VALUES('UPGRADE_SHIP',GET_PLAYER_ID(SESSION_USER), reference_id , quantity, code, 'f',(SELECT last_value FROM tic_seq));
+	INSERT INTO private_event(action, player_id_1, ship_id_1, descriptor_numeric,descriptor_string, tic)
+	VALUES('UPGRADE_SHIP',GET_PLAYER_ID(SESSION_USER), reference_id , quantity, code, (SELECT last_value FROM tic_seq));
 
 	RETURN TRUE;
 END 
@@ -1038,8 +1048,8 @@ BEGIN
 	FOR found_item IN SELECT * FROM item_location WHERE location ~= NEW.location LOOP
 		DELETE FROM item_location WHERE location ~= found_item.location and system_name=found_item.system_name;
 		INSERT INTO player_inventory(player_id, item) VALUES(NEW.player_id, found_item.system_name);
-		INSERT INTO event(action, player_id_1, ship_id_1, location, descriptor_string, public, tic)
-			VALUES('FIND_ITEM',NEW.player_id, NEW.id , NEW.location, found_item.system_name, 'f',(SELECT last_value FROM tic_seq));
+		INSERT INTO private_event(action, player_id_1, ship_id_1, location, descriptor_string, tic)
+			VALUES('FIND_ITEM',NEW.player_id, NEW.id , NEW.location, found_item.system_name,(SELECT last_value FROM tic_seq));
 	END LOOP;
 	RETURN NEW;	
 END
@@ -1065,6 +1075,8 @@ INSERT INTO action VALUES
 	('EXPLODE','(#%player_id_1%)%player_name_1%''s ship (#%ship_id_1%)%ship_name_1% has been destroyed'::TEXT),
 	('MINE_SUCCESS','(#%player_id_1%)%player_name_1%''s ship (#%ship_id_1%)%ship_name_1% has successfully mined %descriptor_numeric% fuel from the planet (#%referencing_id%)%planet_name%'::TEXT),
 	('MINE_FAIL','(#%player_id_1%)%player_name_1%''s ship (#%ship_id_1%)%ship_name_1% has failed to mine the planet (#%referencing_id%)%planet_name%'::TEXT),
+	('FLEET_SUCCESS','(#%player_id_1%)%player_name_1%''s fleet #%referencing_id% completed successfully. Execution took: %descriptor_string%'::TEXT),
+	('FLEET_FAIL','(#%player_id_1%)%player_name_1%''s fleet #%referencing_id% encountered an issue during execution and was terminated. The error logged was: %descriptor_string%'::TEXT),
 	('REPAIR','(#%player_id_1%)%player_name_1%''s ship (#%ship_id_1%)%ship_name_1% has repaired (#%ship_id_2%)%ship_name_2% by %descriptor_numeric%'::TEXT),
 	('TRADE_START','(#%player_id_1%)%player_name_1% has started a trade (#%referencing_id%) with (#%player_id_2%)%player_name_2%'::TEXT),
 	('TRADE_ADD_ITEM','(#%player_id_1%)%player_name_1% has added %descriptor_numeric% of %descriptor_string% to the trade (#%referencing_id%)'::TEXT),
@@ -1098,11 +1110,7 @@ $edit_action$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TRIGGER EDIT_ACTION BEFORE INSERT OR UPDATE ON action
   FOR EACH ROW EXECUTE PROCEDURE EDIT_ACTION();
 
-
-
-
-CREATE TABLE event
-(
+create table global_event (
 	id integer NOT NULL PRIMARY KEY,
 	action character(30) NOT NULL REFERENCES action(name),
 	player_id_1 integer REFERENCES player(id),
@@ -1113,7 +1121,21 @@ CREATE TABLE event
 	descriptor_numeric numeric, 
 	descriptor_string CHARACTER VARYING, 
 	location point,
-	public boolean, 
+	tic integer NOT NULL,
+	toc timestamp NOT NULL DEFAULT NOW()
+);
+create table private_event (
+	id integer NOT NULL PRIMARY KEY,
+	action character(30) NOT NULL REFERENCES action(name),
+	player_id_1 integer REFERENCES player(id),
+	ship_id_1 integer REFERENCES ship(id), 
+	player_id_2 integer REFERENCES player(id), 
+	ship_id_2 integer REFERENCES ship(id),
+	referencing_id integer,  
+	descriptor_numeric numeric, 
+	descriptor_string CHARACTER VARYING, 
+	location point,
+	public boolean DEFAULT 'f', 
 	tic integer NOT NULL,
 	toc timestamp NOT NULL DEFAULT NOW()
 );
@@ -1145,28 +1167,59 @@ CREATE SEQUENCE event_id_seq
   CACHE 1;
 
 
-CREATE VIEW my_events AS
-SELECT
-	event.id as id,
-	event.action as action,
-	event.player_id_1 as player_id_1,
-	event.ship_id_1 as ship_id_1, 
-	event.player_id_2 as player_id_2, 
-	event.ship_id_2 as ship_id_2,  
-	event.referencing_id as referencing_id,
-	event.descriptor_numeric as descriptor_numeric, 
-	event.descriptor_string as descriptor_string, 
-	event.location as location, 
-	event.public as public, 
-	event.tic as tic, 
-	event.toc as toc
-FROM event
-WHERE 
-	( 
-		GET_PLAYER_ID(SESSION_USER) IN (event.player_id_1, event.player_id_2)
-		OR event.public='t' 
-	)
-AND event.tic < (SELECT last_value FROM tic_seq);
+CREATE OR REPLACE VIEW my_events AS 
+WITH
+	current_player AS (SELECT GET_PLAYER_ID(SESSION_USER) AS player_id),
+	p1_event AS (SELECT * FROM event, current_player WHERE player_id_1 = current_player.player_id and public='f'),
+	p2_event AS (SELECT * FROM event, current_player WHERE player_id_2 = current_player.player_id and public='f'),
+	public_event AS (SELECT * FROM event, current_player WHERE public='t')
+SELECT 
+	p1_event.id, 
+	p1_event.action, 
+	p1_event.player_id_1, 
+	p1_event.ship_id_1, 
+	p1_event.player_id_2, 
+	p1_event.ship_id_2, 
+	p1_event.referencing_id, 
+	p1_event.descriptor_numeric, 
+	p1_event.descriptor_string, 
+	p1_event.location, 
+	p1_event.public, 
+	p1_event.tic, 
+	p1_event.toc
+ FROM p1_event 
+   UNION ALL 
+SELECT 
+	p2_event.id, 
+	p2_event.action, 
+	p2_event.player_id_1, 
+	p2_event.ship_id_1, 
+	p2_event.player_id_2, 
+	p2_event.ship_id_2, 
+	p2_event.referencing_id, 
+	p2_event.descriptor_numeric, 
+	p2_event.descriptor_string, 
+	p2_event.location, 
+	p2_event.public, 
+	p2_event.tic, 
+	p2_event.toc
+ FROM p2_event 
+ UNION ALL
+ SELECT 
+	public_event.id, 
+	public_event.action, 
+	public_event.player_id_1, 
+	public_event.ship_id_1, 
+	public_event.player_id_2, 
+	public_event.ship_id_2, 
+	public_event.referencing_id, 
+	public_event.descriptor_numeric, 
+	public_event.descriptor_string, 
+	public_event.location, 
+	public_event.public, 
+	public_event.tic, 
+	public_event.toc
+ FROM public_event; 
 
 
 CREATE OR REPLACE FUNCTION READ_EVENT(read_event_id integer) RETURNS 
@@ -1210,6 +1263,18 @@ BEGIN
 END
 $read_event$ LANGUAGE plpgsql;
 
+
+CREATE OR REPLACE FUNCTION insert_fleet_event(fleet integer, took interval)
+  RETURNS boolean AS
+$BODY$
+BEGIN
+	INSERT INTO event(action, player_id_1, public, tic, descriptor_string, referencing_id) 
+		VALUES('FLEET_SUCCESS',GET_PLAYER_ID(SESSION_USER),'f',(SELECT last_value FROM tic_seq),took, fleet) ;
+	RETURN 't';
+END $BODY$
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  COST 100;
+
 --Ok, doubling this isn't an elegant solution but we can clean it up.. later
 --cleaning things up later actually happens right?
 CREATE OR REPLACE FUNCTION READ_EVENT(read_round_id integer, read_event_id integer) RETURNS 
@@ -1248,7 +1313,6 @@ BEGIN
 	) into full_text
 	FROM event_archive INNER JOIN action on event_archive.action=action.name 
 	WHERE event_archive.event_id=read_event_id AND event_archive.round=read_round_id; 
-
         RETURN full_text;
 END
 $read_event$ LANGUAGE plpgsql;
@@ -1281,8 +1345,8 @@ CREATE RULE trade_insert AS ON INSERT TO my_trades
 
 CREATE OR REPLACE FUNCTION CREATE_TRADE_EVENT() RETURNS trigger AS $create_trade_event$
 BEGIN
-	INSERT INTO event(action, player_id_1, player_id_2, referencing_id, public, tic)
-		VALUES('TRADE_START',NEW.player_id_1, NEW.player_id_2 , NEW.id, 'f',(SELECT last_value FROM tic_seq));
+	INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, tic)
+		VALUES('TRADE_START',NEW.player_id_1, NEW.player_id_2 , NEW.id, (SELECT last_value FROM tic_seq));
         RETURN NULL;
 END
 $create_trade_event$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -1309,8 +1373,8 @@ DO INSTEAD
 
 CREATE OR REPLACE FUNCTION DELETE_TRADE_EVENT() RETURNS trigger AS $delete_trade_event$
 BEGIN
-	INSERT INTO event(action, player_id_1, player_id_2, referencing_id, public, tic)
-		VALUES('TRADE_CANCEL',OLD.player_id_1, OLD.player_id_2 , OLD.id, 'f',(SELECT last_value FROM tic_seq));
+	INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, tic)
+		VALUES('TRADE_CANCEL',OLD.player_id_1, OLD.player_id_2 , OLD.id, (SELECT last_value FROM tic_seq));
         RETURN NULL;
 END
 $delete_trade_event$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -1419,8 +1483,8 @@ BEGIN
 		IF check_value > NEW.quantity THEN 
 			UPDATE player SET fuel_reserve=fuel_reserve-NEW.quantity WHERE id = NEW.player_id;
 
-			INSERT INTO event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string, public, tic)
-				VALUES('TRADE_ADD_ITEM',trader_1, trader_2 , NEW.trade_id, NEW.quantity, NEW.description_code,'f',(SELECT last_value FROM tic_seq));
+			INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string, tic)
+				VALUES('TRADE_ADD_ITEM',trader_1, trader_2 , NEW.trade_id, NEW.quantity, NEW.description_code,(SELECT last_value FROM tic_seq));
 
 		ELSE
 			EXECUTE 'NOTIFY ' || get_player_error_channel() ||', ''You cant add more fuel to a trade then you hold in my_player.fuel_reserve'';';
@@ -1431,8 +1495,8 @@ BEGIN
 		IF check_value > NEW.quantity THEN 
 			UPDATE player SET balance=balance-NEW.quantity WHERE id = NEW.player_id;
 
-			INSERT INTO event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string, public, tic)
-				VALUES('TRADE_ADD_ITEM',trader_1, trader_2 , NEW.trade_id, NEW.quantity, NEW.description_code,'f',(SELECT last_value FROM tic_seq));
+			INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string, tic)
+				VALUES('TRADE_ADD_ITEM',trader_1, trader_2 , NEW.trade_id, NEW.quantity, NEW.description_code,(SELECT last_value FROM tic_seq));
 
 		ELSE
 			 EXECUTE 'NOTIFY ' || get_player_error_channel() ||', ''You cant add more money to a trade then you hold in your my_player.balance'';';
@@ -1444,8 +1508,8 @@ BEGIN
 			--player 0 = schemaverse 
 			UPDATE ship SET player_id=0, fleet_id=NULL WHERE id=CAST(NEW.descriptor as integer);
 
-			INSERT INTO event(action, player_id_1, player_id_2, referencing_id, ship_id_1,  public, tic)
-				VALUES('TRADE_ADD_SHIP',trader_1, trader_2 , NEW.trade_id,  NEW.descriptor::integer,'f',(SELECT last_value FROM tic_seq));
+			INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, ship_id_1,  tic)
+				VALUES('TRADE_ADD_SHIP',trader_1, trader_2 , NEW.trade_id,  NEW.descriptor::integer,(SELECT last_value FROM tic_seq));
 
 		ELSE
 			EXECUTE 'NOTIFY ' || get_player_error_channel() ||', ''Trading a ship you dont own is kind of a DM'';';
@@ -1457,8 +1521,8 @@ BEGIN
 		IF check_value > NEW.quantity THEN 
 			UPDATE player_inventory SET quantity=quantity-NEW.quantity WHERE item=NEW.descriptor and player_id = NEW.player_id;
 
-			INSERT INTO event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string, public, tic)
-				VALUES('TRADE_ADD_ITEM',trader_1, trader_2 , NEW.trade_id, NEW.quantity, NEW.descriptor,'f',(SELECT last_value FROM tic_seq));
+			INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string, tic)
+				VALUES('TRADE_ADD_ITEM',trader_1, trader_2 , NEW.trade_id, NEW.quantity, NEW.descriptor,(SELECT last_value FROM tic_seq));
 
 
 		ELSE
@@ -1495,26 +1559,26 @@ BEGIN
 	IF OLD.description_code = 'FUEL' THEN
 		UPDATE player SET fuel_reserve=fuel_reserve+OLD.quantity WHERE id = OLD.player_id;
 
-		INSERT INTO event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string, public, tic)
-			VALUES('TRADE_DELETE_ITEM',trader_1, trader_2 , OLD.trade_id, OLD.quantity, OLD.description_code,'f',(SELECT last_value FROM tic_seq));
+		INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string,  tic)
+			VALUES('TRADE_DELETE_ITEM',trader_1, trader_2 , OLD.trade_id, OLD.quantity, OLD.description_code,(SELECT last_value FROM tic_seq));
 
 
 	ELSEIF OLD.description_code = 'MONEY' THEN
 		UPDATE player SET balance=balance+OLD.quantity WHERE id = OLD.player_id;
-		INSERT INTO event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string, public, tic)
-			VALUES('TRADE_DELETE_ITEM',trader_1, trader_2 , OLD.trade_id, OLD.quantity, OLD.description_code,'f',(SELECT last_value FROM tic_seq));
+		INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string,  tic)
+			VALUES('TRADE_DELETE_ITEM',trader_1, trader_2 , OLD.trade_id, OLD.quantity, OLD.description_code,(SELECT last_value FROM tic_seq));
 
 
 	ELSEIF OLD.description_code = 'SHIP' THEN
 		UPDATE ship SET player_id=OLD.player_id, fleet_id=NULL WHERE id = CAST(OLD.descriptor as integer);
 
-		INSERT INTO event(action, player_id_1, player_id_2, referencing_id, ship_id_1,  public, tic)
-			VALUES('TRADE_DELETE_SHIP',trader_1, trader_2 , OLD.trade_id, OLD.descriptor::integer,'f',(SELECT last_value FROM tic_seq));
+		INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, ship_id_1,   tic)
+			VALUES('TRADE_DELETE_SHIP',trader_1, trader_2 , OLD.trade_id, OLD.descriptor::integer,(SELECT last_value FROM tic_seq));
 
 	ELSEIF OLD.description_code = 'ITEM' THEN
 		INSERT INTO player_inventory(player_id, item, quantity) VALUES(OLD.player_id, OLD.descriptor, OLD.quantity); 
-		INSERT INTO event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string, public, tic)
-			VALUES('TRADE_DELETE_ITEM',trader_1, trader_2 , OLD.trade_id, OLD.quantity, OLD.descriptor,'f',(SELECT last_value FROM tic_seq));
+		INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id, descriptor_numeric, descriptor_string,  tic)
+			VALUES('TRADE_DELETE_ITEM',trader_1, trader_2 , OLD.trade_id, OLD.quantity, OLD.descriptor,(SELECT last_value FROM tic_seq));
 
 	END IF;
 
@@ -1557,17 +1621,17 @@ BEGIN
 		
 		NEW.complete = 't';
 
-		INSERT INTO event(action, player_id_1, player_id_2, referencing_id, public, tic)
-			VALUES('TRADE_COMPLETE',NEW.player_id_1, NEW.player_id_2 , NEW.id,'f',(SELECT last_value FROM tic_seq));
+		INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id,  tic)
+			VALUES('TRADE_COMPLETE',NEW.player_id_1, NEW.player_id_2 , NEW.id,(SELECT last_value FROM tic_seq));
                                                         
 	END IF;
 
 	IF NEW.complete='f' AND (NOT NEW.confirmation_1=OLD.confirmation_1) AND NEW.confirmation_1=NEW.player_id_1 THEN 
-		INSERT INTO event(action, player_id_1, player_id_2, referencing_id, public, tic)
-			VALUES('TRADE_CONFIRM',NEW.player_id_1, NEW.player_id_2 , NEW.id,'f',(SELECT last_value FROM tic_seq));
+		INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id,  tic)
+			VALUES('TRADE_CONFIRM',NEW.player_id_1, NEW.player_id_2 , NEW.id,(SELECT last_value FROM tic_seq));
 	ELSEIF  NEW.complete='f' AND (NOT NEW.confirmation_2=OLD.confirmation_2) AND NEW.confirmation_2=NEW.player_id_2 THEN
-		INSERT INTO event(action, player_id_1, player_id_2, referencing_id, public, tic)
-			VALUES('TRADE_CONFIRM',NEW.player_id_2, NEW.player_id_1 , NEW.id,'f',(SELECT last_value FROM tic_seq));
+		INSERT INTO private_event(action, player_id_1, player_id_2, referencing_id,  tic)
+			VALUES('TRADE_CONFIRM',NEW.player_id_2, NEW.player_id_1 , NEW.id,(SELECT last_value FROM tic_seq));
 	END IF;
 
 RETURN NEW;
@@ -1665,6 +1729,7 @@ CREATE TABLE planet_miners
 
 create unlogged table ships_near_planets (
        ship integer references ship(id) on delete cascade,
+	player_id integer references player(id) on delete cascade,
        planet integer references planet(id) on delete cascade,
        primary key (ship,planet),
        ship_location point,
@@ -1688,16 +1753,17 @@ declare
 begin
 	SELECT last_value INTO current_tic FROM tic_seq;
 	
-	FOR NEW IN SELECT id, range, location FROM ship 
+	FOR NEW IN SELECT id, range, location, player_id FROM ship 
 		WHERE last_move_tic between current_tic-5 and current_tic 
 		LOOP
 
+
 	   delete from ships_near_planets where ship = NEW.id;
 	   -- Record the 10 planets that are nearest to the specified ship
-	   insert into ships_near_planets (ship, planet, ship_location, planet_location, distance, conqueror_id, ship_owner)
-	     select NEW.id, p.id, NEW.location, p.location, NEW.location <-> p.location, p.conqueror_id, ship_owner
+	   insert into ships_near_planets (ship, player_id, planet, ship_location, planet_location, distance)
+	     select NEW.id, NEW.player_id, p.id, NEW.location, p.location, NEW.location <-> p.location
 	       from planets p 
-		--where CIRCLE(NEW.location, NEW.range) ~ p.location
+		where CIRCLE(NEW.location, NEW.range) <@ CIRCLE(p.location,100000)
 	       order by NEW.location <-> p.location desc limit 10;
      END LOOP;
 	return 't';
@@ -1707,10 +1773,15 @@ $BODY$
   COST 100;
 
 
-CREATE OR REPLACE VIEW planets_in_range AS 
- SELECT sp.ship, sp.planet, sp.ship_location, sp.planet_location, sp.distance, sp.conqueror_id, sp.ship_owner
-   FROM ships_near_planets sp
-  WHERE sp.ship_owner = get_player_id("session_user"());
+CREATE OR REPLACE VIEW planets_in_range AS
+WITH 
+	current_player AS (SELECT GET_PLAYER_ID(SESSION_USER) as player_id),
+	s AS (SELECT ship.id, ship.name, ship.location, ship.range, ship.destroyed from ship, current_player WHERE ship.player_id=current_player.player_id),
+	sp AS (SELECT  ships_near_planets.* FROM ships_near_planets, current_player WHERE ships_near_planets.player_id=current_player.player_id)
+	
+ SELECT sp.ship, sp.planet, sp.ship_location, sp.planet_location, sp.distance
+   FROM s, sp
+  WHERE s.destroyed ='f' AND s.id = sp.ship;
 
 CREATE VIEW planets AS
 SELECT 
@@ -1727,8 +1798,8 @@ CREATE RULE planet_update AS ON UPDATE TO planets
 CREATE OR REPLACE FUNCTION UPDATE_PLANET() RETURNS trigger as $update_planet$
 BEGIN
 	IF NEW.conqueror_id!=OLD.conqueror_id THEN
-		INSERT INTO event(action, player_id_1, player_id_2, referencing_id, location, public, tic)
-			VALUES('CONQUER',NEW.conqueror_id,OLD.conqueror_id, NEW.id , NEW.location, 't',(SELECT last_value FROM tic_seq));
+		INSERT INTO global_event(action, player_id_1, player_id_2, referencing_id, location,  tic)
+			VALUES('CONQUER',NEW.conqueror_id,OLD.conqueror_id, NEW.id , NEW.location, (SELECT last_value FROM tic_seq));
 	END IF;
 	RETURN NEW;	
 END
@@ -1883,7 +1954,10 @@ CREATE TRIGGER TRADE_ID_DEALER BEFORE INSERT OR UPDATE ON trade
 CREATE TRIGGER TRADE_ID_DEALER BEFORE INSERT OR UPDATE ON trade_item
   FOR EACH ROW EXECUTE PROCEDURE ID_DEALER(); 
 
-CREATE TRIGGER EVENT_LOG_ID_DEALER BEFORE INSERT OR UPDATE ON event
+CREATE TRIGGER EVENT_LOG_ID_DEALER BEFORE INSERT OR UPDATE ON private_event
+  FOR EACH ROW EXECUTE PROCEDURE ID_DEALER(); 
+
+CREATE TRIGGER EVENT_LOG_ID_DEALER BEFORE INSERT OR UPDATE ON global_event
   FOR EACH ROW EXECUTE PROCEDURE ID_DEALER(); 
 
 CREATE TRIGGER TROPHY_ID_DEALER BEFORE INSERT OR UPDATE ON trophy
@@ -2032,60 +2106,26 @@ BEGIN
 END
 $action_permission_check$ LANGUAGE plpgsql SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION IN_RANGE_SHIP(ship_1 integer, ship_2 integer) RETURNS boolean AS $in_range_ship$
-DECLARE
-	check_count integer;
-BEGIN
-	SELECT 
-		count(enemies.id)
-	INTO check_count
-	FROM ship enemies, ship players
-	WHERE 	
-		enemies.destroyed='f' AND players.destroyed='f'
-		AND
-		(
-			players.id=ship_1
-			AND 
-			enemies.id=ship_2
- 		) 
-		AND
-		(	
-			(enemies.location <-> players.location) < players.range
-		);
-	IF check_count = 1 THEN
-		RETURN 't';
-	ELSE
-		RETURN 'f';
-	END IF;
-END
-$in_range_ship$ LANGUAGE plpgsql SECURITY DEFINER;
+CREATE OR REPLACE FUNCTION IN_RANGE_SHIP(player_ship integer, enemy_ship integer) RETURNS boolean AS $in_range_ship$
+  select exists
+    (select 1 from ship enemy, ship player
+       where and player.id = $1 and enemy.id = $2
+       and not enemy.destroyed
+       and not player.destroyed
+       and (enemy.location <->player.location) < player.range);
+$in_range_ship$ LANGUAGE sql SECURITY DEFINER;
+
+comment on FUNCTION IN_RANGE_SHIP(player_ship integer, enemy_ship integer) is
+'See if the enemy ship is in range of the player ship.  Note that the range is based on the player - 
+it is NOT necessarily the case that in_range_ship(a,b) = in_range_ship(b,a).';
 
 CREATE OR REPLACE FUNCTION IN_RANGE_PLANET(ship_id integer, planet_id integer) RETURNS boolean AS $in_range_planet$
-DECLARE
-	check_count integer;
-BEGIN
-	SELECT 
-		count(planet.id)
-	INTO check_count
-	FROM planet, ship
-	WHERE 	ship.destroyed='f'
-		AND
-		(
-			ship.id=ship_id
-			AND 
-			planet.id=planet_id
- 		) 
-		AND
-		(
-			(planet.location <-> ship.location) < ship.range
-		);
-	IF check_count = 1 THEN
-		RETURN 't';
-	ELSE
-		RETURN 'f';
-	END IF;
-END
-$in_range_planet$ LANGUAGE plpgsql SECURITY DEFINER;
+	select exists (select 1 from planet p, ship s
+	       	       where 
+		       	  s.id = $1 and p.id = $2 and
+                          not s.destroyed and
+                          (p.location <->s.location) < s.range)
+$in_range_planet$ LANGUAGE sql SECURITY DEFINER;
 
 -- Action methods
 CREATE OR REPLACE FUNCTION Attack(attacker integer, enemy_ship integer) RETURNS integer AS $attack$
@@ -2114,8 +2154,8 @@ BEGIN
 		UPDATE ship SET future_health=future_health-damage WHERE id=enemy_ship;
 		UPDATE ship SET last_action_tic=(SELECT last_value FROM tic_seq) WHERE id=attacker;
 		
-		INSERT INTO event(action, player_id_1,ship_id_1, player_id_2, ship_id_2, descriptor_numeric, location,public, tic)
-			VALUES('ATTACK',attacker_player_id, attacker, enemy_player_id, enemy_ship , damage, loc, 't',(SELECT last_value FROM tic_seq));
+		INSERT INTO global_event(action, player_id_1,ship_id_1, player_id_2, ship_id_2, descriptor_numeric, location, tic)
+			VALUES('ATTACK',attacker_player_id, attacker, enemy_player_id, enemy_ship , damage, loc, (SELECT last_value FROM tic_seq));
 	ELSE 
 		 EXECUTE 'NOTIFY ' || get_player_error_channel() ||', ''Attack from ' || attacker || ' to '|| enemy_ship ||' failed'';';
 	END IF;	
@@ -2141,8 +2181,8 @@ BEGIN
 		SELECT name INTO repaired_ship_name FROM ship WHERE id=repaired_ship;
 		UPDATE ship SET future_health = future_health + repair_rate WHERE id=repaired_ship;
 		UPDATE ship SET last_action_tic=(SELECT last_value FROM tic_seq) WHERE id=repair_ship;
-		INSERT INTO event(action, player_id_1,ship_id_1, ship_id_2, descriptor_numeric, location, public, tic)
-			VALUES('REPAIR',repair_ship_player_id, repair_ship,  repaired_ship , repair_rate,loc,'t',(SELECT last_value FROM tic_seq));
+		INSERT INTO global_event(action, player_id_1,ship_id_1, ship_id_2, descriptor_numeric, location,  tic)
+			VALUES('REPAIR',repair_ship_player_id, repair_ship,  repaired_ship , repair_rate,loc,(SELECT last_value FROM tic_seq));
 
 	ELSE 
 		 EXECUTE 'NOTIFY ' || get_player_error_channel() ||', ''Repair from ' || repair_ship || ' to '|| repaired_ship ||' failed'';';
@@ -2209,8 +2249,8 @@ BEGIN
 			END IF;
 
 			IF mined_player_fuel <= 0 THEN
-				INSERT INTO event(action, player_id_1,ship_id_1, referencing_id, location, public, tic)
-					VALUES('MINE_FAIL',miners.player_id, miners.ship_id, miners.planet_id, miners.location,'f',(SELECT last_value FROM tic_seq));		
+				INSERT INTO private_event(action, player_id_1,ship_id_1, referencing_id, location,  tic)
+					VALUES('MINE_FAIL',miners.player_id, miners.ship_id, miners.planet_id, miners.location,(SELECT last_value FROM tic_seq));		
 			ELSE 
 				SELECT INTO new_fuel_reserve fuel_reserve + mined_player_fuel FROM player WHERE id=miners.player_id;
 				IF new_fuel_reserve > 2147483647 THEN
@@ -2224,14 +2264,14 @@ BEGIN
 				UPDATE player SET fuel_reserve = (new_fuel_reserve)::integer WHERE id = miners.player_id;
 				UPDATE planet SET fuel = (fuel - mined_player_fuel)::integer WHERE id = current_planet_id;
 
-				INSERT INTO event(action, player_id_1,ship_id_1, referencing_id, descriptor_numeric, location, public, tic)
-					VALUES('MINE_SUCCESS',miners.player_id, miners.ship_id, miners.planet_id , mined_player_fuel,miners.location,'t',
+				INSERT INTO private_event(action, player_id_1,ship_id_1, referencing_id, descriptor_numeric, location,  tic)
+					VALUES('MINE_SUCCESS',miners.player_id, miners.ship_id, miners.planet_id , mined_player_fuel,miners.location,
 					(SELECT last_value FROM tic_seq));
 			END IF;
 			limit_counter = limit_counter + 1;
 		ELSE
-			--INSERT INTO event(action, player_id_1,ship_id_1, referencing_id, location, public, tic)
-			--	VALUES('MINE_FAIL',miners.player_id, miners.ship_id, miners.planet_id, miners.location,'f',(SELECT last_value FROM tic_seq));
+			--INSERT INTO private_event(action, player_id_1,ship_id_1, referencing_id, location, tic)
+			--	VALUES('MINE_FAIL',miners.player_id, miners.ship_id, miners.planet_id, miners.location,(SELECT last_value FROM tic_seq));
 		END IF;		
 		DELETE FROM planet_miners WHERE planet_id=miners.planet_id AND ship_id=miners.ship_id;
 	END LOOP;
@@ -2470,7 +2510,7 @@ CREATE OR REPLACE VIEW current_player_stats AS
 		SUM(CASE WHEN event.action ='UPGRADE_SHIP' THEN event.descriptor_numeric ELSE NULL END ) as ship_upgrades,
 		SUM(CASE WHEN event.action ='MINE_SUCCESS' THEN event.descriptor_numeric ELSE NULL END ) as fuel_mined,
 		event.player_id_1
-	FROM event event 
+	FROM private_event event 
 	WHERE event.action in ('ATTACK','CONQUER','BUY_SHIP','EXPLODE','UPGRADE_SHIP','MINE_SUCCESS') 
 	GROUP BY player_id_1) 
    for_player ON (for_player.player_id_1=player.id)
@@ -2479,7 +2519,7 @@ CREATE OR REPLACE VIEW current_player_stats AS
 		SUM(CASE WHEN event.action = 'ATTACK' THEN event.descriptor_numeric ELSE NULL END) AS damage_taken, 
 		COUNT(CASE WHEN event.action = 'CONQUER' THEN  COALESCE(event.descriptor_numeric,0) ELSE NULL END) as planets_lost,
 		event.player_id_2  
-	FROM event event 
+	FROM global_event event 
 	WHERE event.action IN ('ATTACK','CONQUER') 
 	GROUP BY player_id_2) 
    against_player ON (against_player.player_id_2=player.id)
@@ -2522,7 +2562,7 @@ CREATE OR REPLACE VIEW current_round_stats AS SELECT
 				action,  
 				CASE WHEN event.action IN ('ATTACK','UPGRADE_SHIP','MINE_SUCCESS') THEN sum(coalesce(event.descriptor_numeric,0)) ELSE  NULL END AS sum, 
 				CASE WHEN event.action IN ('BUY_SHIP','EXPLODE','CONQUER') THEN count(*) ELSE NULL END as count 
-			FROM event event 
+			FROM private_event event 
 			WHERE event.action in ('ATTACK','CONQUER','BUY_SHIP','EXPLODE','UPGRADE_SHIP','MINE_SUCCESS') 
 			GROUP BY player_id_1, action) 
 		for_player ON (for_player.round_id=round.round_id)
@@ -2532,7 +2572,7 @@ CREATE OR REPLACE VIEW current_round_stats AS SELECT
 				action,  
 				CASE WHEN event.action = 'ATTACK' THEN sum(coalesce(event.descriptor_numeric,0)) ELSE  NULL END AS sum, 
 				CASE WHEN event.action IN ('CONQUER') THEN count(*) ELSE NULL END as count 
-			FROM event event WHERE event.action IN ('ATTACK','CONQUER') 
+			FROM global_event event WHERE event.action IN ('ATTACK','CONQUER') 
 			GROUP BY player_id_2, action) 
 		against_player ON (against_player.round_id=round.round_id)
         GROUP BY  round.round_id;
@@ -2652,7 +2692,8 @@ REVOKE ALL ON planet_miners FROM players;
 GRANT SELECT ON planets TO players;
 GRANT UPDATE ON planets TO players;
 
-REVOKE ALL ON event FROM players;
+REVOKE ALL ON private_event FROM players;
+REVOKE ALL ON global_event FROM players;
 GRANT SELECT ON my_events TO players;
 
 REVOKE ALL ON event_archive FROM players;
@@ -2798,7 +2839,19 @@ BEGIN
         delete from player_inventory using item where item.system_name=player_inventory.item and item.persistent='f';
 
 	--add archives of stats and events
-	INSERT INTO event_archive SELECT (SELECT last_value FROM round_seq), event.* FROM event;
+	INSERT INTO event_archive (round, public, event_id, action, player_id_1, ship_id_1, player_id_2,
+	ship_id_2, referencing_id, descriptor_numeric,
+	descriptor_string, location, public, tic, toc)
+	SELECT (SELECT last_value FROM round_seq), 'f', round, public, event_id, action, player_id_1, ship_id_1, player_id_2,
+	ship_id_2, referencing_id, descriptor_numeric,
+	descriptor_string, location, public, tic, toc FROM private_event;
+
+	INSERT INTO event_archive (round, public, event_id, action, player_id_1, ship_id_1, player_id_2,
+	ship_id_2, referencing_id, descriptor_numeric,
+	descriptor_string, location, public, tic, toc)
+	SELECT (SELECT last_value FROM round_seq), 't', round, public, event_id, action, player_id_1, ship_id_1, player_id_2,
+	ship_id_2, referencing_id, descriptor_numeric,
+	descriptor_string, location, public, tic, toc FROM global_event;
 
 	--Delete everything else
         delete from planet_miners;
@@ -2896,18 +2949,26 @@ $round_control$
   LANGUAGE plpgsql;
 
 -- These seem to make the largest improvement for performance
-CREATE INDEX event_toc_index ON event USING btree (toc);
-CREATE INDEX event_action_index ON event USING hash (action);
+CREATE INDEX p_event_toc_index ON private_event USING btree (toc);
+CREATE INDEX p_event_action_index ON private_event USING hash (action);
+CREATE INDEX g_event_toc_index ON global_event USING btree (toc);
+CREATE INDEX g_event_action_index ON global_event USING hash (action);
 CREATE INDEX ship_location_index ON ship USING GIST (location);
 CREATE INDEX planet_location_index ON planet USING GIST (location);
 
 CREATE INDEX ship_player ON ship USING btree (player_id);
 CREATE INDEX ship_fleet ON ship USING btree (fleet_id);
+CREATE INDEX ship_loc_only ON ship USING gist (CIRCLE(location,1));
+CREATE INDEX ship_loc_range ON ship USING gist (CIRCLE(location,range));
 
 CREATE INDEX fleet_player ON fleet USING btree (player_id);
-CREATE INDEX event_player ON event USING btree (player_id_1);
+CREATE INDEX p_event_player ON private_event USING btree (player_id_1);
+CREATE INDEX p_event_player2 ON private_event USING btree (player_id_2);
+CREATE INDEX g_event_player ON global_event USING btree (player_id_1);
+CREATE INDEX g_event_player2 ON global_event USING btree (player_id_2);
 
 CREATE INDEX planet_player ON planet USING btree (conqueror_id);
+CREATE INDEX planet_loc_only ON planet USING gist (CIRCLE(location,100000));
 
 CREATE INDEX live_peoples_ships on ship using btree (player_id) where (not destroyed);
 
