@@ -449,6 +449,7 @@ CREATE TABLE ship_flight_recorder
   ship_id integer NOT NULL REFERENCES ship(id) ON DELETE CASCADE,
   tic integer,
   location point not null,
+  player_id integer not null references player(id) ON DELETE CASCADE,
   PRIMARY KEY (ship_id, tic)
 );
 
@@ -457,8 +458,7 @@ WITH current_player as (SELECT GET_PLAYER_ID(SESSION_USER) AS player_id)
  SELECT 
 	ship_flight_recorder.ship_id, 
 	ship_flight_recorder.tic, 
-	ship_flight_recorder.location_x, 
-	ship_flight_recorder.location_y
+	ship_flight_recorder.location
    FROM 
 	ship_flight_recorder, current_player
   WHERE ship_flight_recorder.player_id = current_player.player_id; 
@@ -1106,10 +1106,10 @@ CREATE TABLE event
 (
 	id integer NOT NULL PRIMARY KEY,
 	action character(30) NOT NULL REFERENCES action(name),
-	player_id_1 integer REFERENCES player(id),
 	ship_id_1 integer REFERENCES ship(id), 
-	player_id_2 integer REFERENCES player(id), 
+	player_id_1 integer REFERENCES player(id),
 	ship_id_2 integer REFERENCES ship(id),
+	player_id_2 integer REFERENCES player(id), 
 	referencing_id integer,  
 	descriptor_numeric numeric, 
 	descriptor_string CHARACTER VARYING, 
@@ -1129,6 +1129,62 @@ CREATE SEQUENCE event_id_seq
   START 1
   CACHE 1;
 
+create or replace view my_events_performed as
+select
+   ev.id,
+   ev.action,
+   ev.player_id_1, 
+   ev.ship_id_1,
+   ev.player_id_2, 
+   ev.ship_id_2, 
+   ev.referencing_id, 
+   ev.descriptor_numeric, 
+   ev.descriptor_string, 
+   ev.location, 
+   ev.public, 
+   ev.tic, 
+   ev.toc
+FROM event ev
+where
+  ev.player_id_1 = GET_PLAYER_ID(SESSION_USER);
+
+create or replace view my_events_received as
+select
+   ev.id,
+   ev.action,
+   ev.player_id_1, 
+   ev.ship_id_1,
+   ev.player_id_2, 
+   ev.ship_id_2, 
+   ev.referencing_id, 
+   ev.descriptor_numeric, 
+   ev.descriptor_string, 
+   ev.location, 
+   ev.public, 
+   ev.tic, 
+   ev.toc
+FROM event ev
+where
+  ev.player_id_2 = GET_PLAYER_ID(SESSION_USER);
+
+create or replace view my_events_public as
+select
+   ev.id,
+   ev.action,
+   ev.player_id_1,
+   ev.ship_id_1, 
+   ev.player_id_2, 
+   ev.ship_id_2, 
+   ev.referencing_id, 
+   ev.descriptor_numeric, 
+   ev.descriptor_string, 
+   ev.location, 
+   ev.public, 
+   ev.tic, 
+   ev.toc
+FROM event ev
+where
+  ev.public;
 
 CREATE OR REPLACE VIEW my_events AS 
 WITH
@@ -2928,6 +2984,9 @@ CREATE INDEX ship_loc_range ON ship USING gist (CIRCLE(location,range));
 
 CREATE INDEX fleet_player ON fleet USING btree (player_id);
 CREATE INDEX event_player ON event USING btree (player_id_1);
+CREATE INDEX event_opponent ON event USING btree (player_id_2);
+CREATE INDEX event_action ON event USING btree (action);
+CREATE INDEX event_location ON event USING gist (location);
 
 CREATE INDEX planet_player ON planet USING btree (conqueror_id);
 CREATE INDEX planet_loc_only ON planet USING gist (CIRCLE(location,100000));
