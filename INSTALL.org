@@ -141,6 +141,34 @@ Stats updated for round 0, with 1 players at 2016-06-20T12:56:15
 #+END_EXAMPLE
 
 
+** Long Running Query Cancellation - ref.pl
+
+~ref.pl~ is used to cancel fleet scripts that run excessively long.
+
+Much as with ~tic.pl~, ~ref.pl~ should be run during the course of
+the game, rather like a daemon.  It often seems preferable to run this
+in a screen/tmux session.
+
+Configuration is captured from the environment using usual PostgreSQL
+environment variables amongst others:
+
+  - PGPORT :: Optional port number, defaulting to 5432, normally
+  - PGHOST :: Mandatory host identification, could be localhost, IP address, hostname
+  - PGUSER :: Mandatory, this is the "master" user for schemaverse, it would be common to pick ~schemaverse~
+  - PGDATABASE :: Mandatory, the name of the database hosting the Schemaverse instance.
+  - SCHEMAVERSESLEEPTIME :: Optional, this indicates number of seconds to sleep between iterations.  Defaults to 60, if not provided.
+
+#+BEGIN_EXAMPLE
+cbbrowne@cbbrowne ~/P/schemaverse> PGDATABASE=schemaverse PGUSER=schemaverse SCHEMAVERSESLEEP=10 ./stat.pl                                                                                                                                                                                                            master!?
+Schemaverse: Launching stato.pl
+    URI being used: dbi:Pg:dbname=schemaverse;host=localhost
+    PGPORT: 7099  PGHOST: localhost  PGDATABASE: schemaverse  PGUSER: schemaverse
+    SCHEMAVERSESLEEP: 10 
+Stats updated for round 0, with 1 players at 2016-06-20T12:56:05
+Stats updated for round 0, with 1 players at 2016-06-20T12:56:15
+#+END_EXAMPLE
+
+
 ** Adding players to a game
 
 This is done by doing an ~INSERT~ to the ~players~ table, as follows:

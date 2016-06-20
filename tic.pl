@@ -31,14 +31,12 @@ my $masteruser = $pguser;
 
 printf ("Schemaverse: Launching tic.pl\n");
 
-my $db_uri = "dbi:Pg:dbname=${pgdatabase}";
 
 printf ("    URI being used: %s\n", $db_uri);
 printf ("    PGPORT: %d  PGHOST: %s  PGDATABASE: %s  PGUSER: %s\n", $pgport, $pghost, $pgdatabase, $pguser);
 printf ("    SCHEMAVERSESLEEP: %d \n", $sleeptime);
 
 my $turn = 0;
-
 while (1) {
 	$turn++;
 	my $tnow = DateTime->now(time_zone=>'local');

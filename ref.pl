@@ -3,25 +3,42 @@
 # 	Ref v0.1	    #
 # Created by Josh McDougall #
 #############################
-# This should be run inside a screen session
+
+# This should be run inside a screen/tmux session
 # Ref.pl makes sure no player has a query over ~1 minute. 
 # Logging could be added here to monitor players trying to cuase problems and disable their accounts
 
 
 # use module
 use DBI; 
+use DateTime;
  
-# Config Variables
-my $db_name 	= "schemaverse";
-my $db_username = "schemaverse";
+my ($pgport, $pghost, $pgdatabase, $pguser, $sleeptime) =
+	($ENV{"PGPORT"}, $ENV{"PGHOST"}, $ENV{"PGDATABASE"}, $ENV{"PGUSER"}, $ENV{"SCHEMAVERSESLEEP"});
+
+if (length($pgdatabase) < 1) {
+	die "Database not specified via environment variable PGDATABASE\n";
+}
+if (length($pguser) < 1) {
+	die "Master user not specified via environment variable PGUSER\n";
+}
+if ($sleeptime < 1) {
+	print "No value provided for SCHEMAVERSESLEEP - using 30 to sleep 30s between rounds\n";
+	$sleeptime = 30;
+}
+
+my $masteruser = $pguser;
+my $db_uri = "dbi:Pg:dbname=${pgdatabase}";
+
+printf ("Schemaverse: Launching ref.pl\n");
+printf ("    URI being used: %s\n", $db_uri);
+printf ("    PGPORT: %d  PGHOST: %s  PGDATABASE: %s  PGUSER: %s\n", $pgport, $pghost, $pgdatabase, $pguser);
+printf ("    SCHEMAVERSESLEEP: %d \n", $sleeptime);
 
 while (1){ 
-
 	# Make the master database connection
-	my $master_connection = DBI->connect("dbi:Pg:dbname=${db_name};host=localhost", $db_username);
-
-
-	my $sql = <<SQLSTATEMENT;
+	my $master_connection = DBI->connect($db_uri, $db_username);
+	my $sql = "
 select 
 	pid as pid, 
 	pg_notify(get_player_error_channel(usename::character varying), 'The following query was canceled due to timeout: ' ||query ),
@@ -49,17 +66,17 @@ where
 		AND query NOT LIKE '%FLEET_SCRIPT_%' 
 		AND now() - query_start > interval '60 seconds'
 		)
-	)
-SQLSTATEMENT
-
-	my $rs = $master_connection->prepare($sql); 
+	);";
+	my $rs = $master_connection->prepare($sql);
 	$rs->execute();
-	
-	#while (($pid, $error_channel, $username, $current_query, $canceled) = $rs->fetchrow()) {}
-	
+	my ($pid, $note, $disabled, $usename, $query, $canres);
+	while (($pid, $note, $disabled, $usename, $query, $canres)=$rs->fetchrow()) {
+		$fleetcount++;
+		printf ("PID:%d Note:%s Disabled:%s User:%s Query:%s Cancelled:%d\n", $pid, $note, $disabled, $usename, $query, $canres);
+	}
+
 	$rs->finish;
-
+	printf("Cancelled excessively long queries\n");
 	$master_connection->disconnect();
-	sleep(30);
-
+	sleep($sleeptime);
 }
