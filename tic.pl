@@ -31,7 +31,7 @@ my $masteruser = $pguser;
 
 printf ("Schemaverse: Launching tic.pl\n");
 
-$db_uri = "dbi:Pg:dbname=${pgdatabase}";
+my $db_uri = "dbi:Pg:dbname=${pgdatabase}";
 
 printf ("    URI being used: %s\n", $db_uri);
 printf ("    PGPORT: %d  PGHOST: %s  PGDATABASE: %s  PGUSER: %s\n", $pgport, $pghost, $pgdatabase, $pguser);

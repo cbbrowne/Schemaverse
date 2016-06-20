@@ -18,7 +18,13 @@
 
   Requires:
    - PostgreSQL 9.3 or so
-   - A suitable user
+   - A suitable user, called ~schemaverse~ The user that owns the
+     objects and operates the game /must/ have this name, and it
+     /must/ have the following capabilities:
+     - CREATE DATABASE
+     - CREATE ROLE
+     - SUPERUSER
+   - The role ~player~ /must not/ pre-exist, as that role is /added/ when ~sqitch~ deploys the database schema.
    - sqitch
    - Head to the schema directory and customize sqitch.conf.  
 
@@ -31,12 +37,12 @@
        the sample that we provide is marked as ignorable by Git, so
        you can have your own copy.
 #+BEGIN_EXAMPLE
-      	target = db:pg://cbbrowne@localhost:7099/schemaverse
+      	target = db:pg://schemaverse@localhost:7099/schemaverse
 #+END_EXAMPLE
    - Create the desired database via PostgreSQL ~createdb~ or SQL ~CREATE DATABASE~.
    - When ready to deploy:
 #+BEGIN_EXAMPLE
-Deploying changes to db:pg://cbbrowne@localhost:7099/schemaverse
+Deploying changes to db:pg://schemaverse@localhost:7099/schemaverse
   + role-players ....................... ok
   + sequence-round_seq ................. ok
   + sequence-tic_seq ................... ok
@@ -102,3 +108,68 @@ Processed 0 fleet scripts
 Processing turn 2, starting at 2016-06-17T12:01:56
 Processed 0 fleet scripts
 #+END_EXAMPLE
+
+*** Ending a game
+
+After running ~tic.pl~ for a while, it is likely that you'll want to
+terminate it, and evaluate results for the round, generating whatever
+trophies are appropriate.
+
+** Statistics Collector - stat.pl
+
+Configuration is captured from the environment using usual PostgreSQL
+environment variables amongst others:
+
+  - PGPORT :: Optional port number, defaulting to 5432, normally
+  - PGHOST :: Mandatory host identification, could be localhost, IP address, hostname
+  - PGUSER :: Mandatory, this is the "master" user for schemaverse, it would be common to pick ~schemaverse~
+  - PGDATABASE :: Mandatory, the name of the database hosting the Schemaverse instance.
+  - SCHEMAVERSESLEEPTIME :: Optional, this indicates number of seconds to sleep between iterations.  Defaults to 60, if not provided.
+
+Much as with ~tic.pl~, ~stat.pl~ should be run during the course of
+the game, rather like a daemon.  It often seems preferable to run this
+in a screen/tmux session.
+
+#+BEGIN_EXAMPLE
+cbbrowne@cbbrowne ~/P/schemaverse> PGDATABASE=schemaverse PGUSER=schemaverse SCHEMAVERSESLEEP=10 ./stat.pl                                                                                                                                                                                                            master!?
+Schemaverse: Launching stato.pl
+    URI being used: dbi:Pg:dbname=schemaverse;host=localhost
+    PGPORT: 7099  PGHOST: localhost  PGDATABASE: schemaverse  PGUSER: schemaverse
+    SCHEMAVERSESLEEP: 10 
+Stats updated for round 0, with 1 players at 2016-06-20T12:56:05
+Stats updated for round 0, with 1 players at 2016-06-20T12:56:15
+#+END_EXAMPLE
+
+
+** Adding players to a game
+
+This is done by doing an ~INSERT~ to the ~players~ table, as follows:
+
+#+BEGIN_EXAMPLE
+schemaverse@localhost->  insert into player (username, password) values ('susan', 'password');
+INSERT 0 1
+#+END_EXAMPLE
+
+Note that this adds user ~susan~, with password ~password~, to the
+database.  This probably needs to be done by the user ~schemaverse~,
+or possibly by some other superuser.  The INSERT leads to a trigger
+firing that does the work of adding the user.
+
+Unfortunately, if the user is already present, the ~INSERT~ request
+will fail.
+
+*** Modifying Game Configuration
+
+There are a number of game parameters in the table ~variable~ that
+control behaviour of the game, including
+
+  - MINE_BASE_FUEL :: Indicates how rich mining is
+  - UNIVERSE_CREATOR :: Indicates the width and breadth of the Schemaverse
+  - EXPLODED :: How many turns does it take for a "dead" ship to blow up
+  - MAX_SHIPS :: How many ships each player is permitted to create
+  - MAX_SHIP_SKILL :: Maximum total improvements  to a ship
+  - Various MAX_SHIP_... :: Other limits to ship improvements
+  - DEFENSE_EFFICIENCY :: How attack interacts with defense
+
+More of the game probably ought to be parameterized, such as:
+  - Default numbers of planets (hard coded as 500)
