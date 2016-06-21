@@ -27,6 +27,9 @@ GRANT SELECT ON my_player TO players;
 GRANT UPDATE ON my_player TO players;
 GRANT SELECT ON online_players TO players;
 
+revoke all on players from players;
+grant select on players to players;
+
 REVOKE ALL ON ship_control FROM players;
 REVOKE ALL ON ship_flight_recorder FROM players;
 GRANT UPDATE ON my_ships TO players;
