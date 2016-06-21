@@ -80,7 +80,7 @@ BEGIN
 
 	--add archives of stats and events
 	CREATE TEMP TABLE tmp_current_round_archive AS SELECT (SELECT last_value FROM round_seq), event.* FROM event;
-	EXECUTE 'COPY tmp_current_round_archive TO ''/hell/schemaverse_round_' || (SELECT last_value FROM round_seq) || '.csv''  WITH DELIMITER ''|''';
+	EXECUTE 'COPY tmp_current_round_archive TO ''/tmp/schemaverse_round_' || (SELECT last_value FROM round_seq) || '.csv''  WITH DELIMITER ''|''';
 
 	--Delete everything else
         DELETE FROM planet_miners;
