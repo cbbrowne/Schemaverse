@@ -159,15 +159,13 @@ environment variables amongst others:
   - SCHEMAVERSESLEEPTIME :: Optional, this indicates number of seconds to sleep between iterations.  Defaults to 60, if not provided.
 
 #+BEGIN_EXAMPLE
-cbbrowne@cbbrowne ~/P/schemaverse> PGDATABASE=schemaverse PGUSER=schemaverse SCHEMAVERSESLEEP=10 ./stat.pl                                                                                                                                                                                                            master!?
-Schemaverse: Launching stato.pl
-    URI being used: dbi:Pg:dbname=schemaverse;host=localhost
+cbbrowne@cbbrowne ~/P/schemaverse> PGDATABASE=schemaverse PGUSER=schemaverse SCHEMAVERSESLEEP=10 ./ref.pl                                                                                                                                                                                                             master!?
+Schemaverse: Launching ref.pl
+    URI being used: dbi:Pg:dbname=schemaverse
     PGPORT: 7099  PGHOST: localhost  PGDATABASE: schemaverse  PGUSER: schemaverse
     SCHEMAVERSESLEEP: 10 
-Stats updated for round 0, with 1 players at 2016-06-20T12:56:05
-Stats updated for round 0, with 1 players at 2016-06-20T12:56:15
+Cancelled excessively long queries
 #+END_EXAMPLE
-
 
 ** Adding players to a game
 
