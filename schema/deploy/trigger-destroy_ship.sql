@@ -10,10 +10,6 @@ BEGIN
 	IF ( NOT OLD.destroyed = NEW.destroyed ) AND NEW.destroyed='t' THEN
 	        UPDATE player SET balance=balance+(select cost from price_list where code='SHIP') WHERE id=OLD.player_id;
 		
-		delete from ships_near_planets where ship = NEW.id;
-	   	delete from ships_near_ships where first_ship = NEW.id;
-	   	delete from ships_near_ships where second_ship = NEW.id;
-
 		INSERT INTO event(action, player_id_1, ship_id_1, location, public, tic)
 			VALUES('EXPLODE',NEW.player_id, NEW.id, NEW.location, 't',(SELECT last_value FROM tic_seq));
 
@@ -24,7 +20,7 @@ $BODY$
   LANGUAGE plpgsql VOLATILE SECURITY DEFINER
   COST 100;
 
-
+drop trigger if exists destroy_ship on ship;
 CREATE TRIGGER destroy_ship
   AFTER UPDATE
   ON ship
